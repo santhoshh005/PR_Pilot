@@ -1,0 +1,27 @@
+{
+  "chunk_summary": "Adds input validation to formatHeader and safeguards calculation in calculateRate.",
+  "comments": [
+    {
+      "file_path": "src/utils.ts",
+      "line_number": 7,
+      "severity": "suggestion",
+      "title": "Consider trimming whitespace before check",
+      "body": "The check handles empty trimmed strings well, but consider documenting the fallback behavior.",
+      "suggestion": "if (!trimmed) {\n  // Fallback to default header title\n  return \"Default Header\";\n}"
+    },
+    {
+      "file_path": "src/utils.ts",
+      "line_number": 36,
+      "severity": "warning",
+      "title": "Potential zero-multiplication on negative amount",
+      "body": "Math.max(0, amount) clamps negative numbers to zero. If negative amounts should be rejected, consider throwing an error instead.",
+      "suggestion": "if (amount < 0) {\n  throw new Error(\"Amount must be non-negative\");\n}"
+    }
+  ],
+  "severity_counts": {
+    "critical": 0,
+    "warning": 1,
+    "suggestion": 1,
+    "praise": 0
+  }
+}
