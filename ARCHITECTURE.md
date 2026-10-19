@@ -1,0 +1,142 @@
+# PRPilot — Architecture
+
+## System Components
+
+```mermaid
+graph LR
+  GH["GitHub Webhooks"] -->|POST /api/webhook| WH["Webhook Handler"]
+  WH -->|verify sig, dedup| DB["Supabase Postgres"]
+  WH -->|enqueue + waitUntil| RP["Review Processor"]
+  RP -->|fetch diff via| OC["Octokit"]
+  RP -->|chunk + prompt| GM["Gemini 3.8 Flash"]
+  GM -->|structured JSON| RP
+  RP -->|post comments via| OC
+  RP -->|write results| DB
+  CR["Cron Fallback"] -->|resume incomplete| RP
+  UI["Dashboard"] -->|read| DB
+  UI -->|Supabase Auth| SA["GitHub OAuth"]
+```
+
+## Components
+
+| Component | Technology | Purpose |
+|---|---|---|
+| Webhook endpoint | Next.js Route Handler (`POST /api/webhook`) | Receives GitHub `pull_request` events |
+| Review processor | Next.js Route Handler (`POST /api/cron/process-reviews`) | Picks pending reviews from queue, runs AI, posts comments |
+| Dashboard UI | Next.js App Router (RSC + client) | Shows repos, reviews, charts |
+| Auth | Supabase Auth with GitHub OAuth provider | Sign in, session management |
+| Database | Supabase Postgres with RLS | All persistent state |
+| AI engine | Gemini API via `@google/genai` | Code review generation |
+| GitHub integration | Octokit (`@octokit/rest`, `@octokit/auth-app`) | Fetch diffs, post comments |
+
+## Webhook-to-Comment Pipeline
+
+```mermaid
+sequenceDiagram
+  participant GH as GitHub
+  participant WH as /api/webhook
+  participant DB as Supabase DB
+  participant CRON as /api/cron/process-reviews
+  participant AI as Gemini 3.8 Flash
+  participant GHAPI as GitHub API
+
+  GH->>WH: POST pull_request (opened/synchronize)
+  WH->>WH: Verify X-Hub-Signature-256
+  WH->>DB: Check delivery_id idempotency
+  WH->>DB: INSERT review_jobs (status=pending)
+  WH-->>GH: 200 OK (< 3s)
+
+  Note over CRON: Vercel Cron (every 1 min) or<br/>on-demand invocation
+  CRON->>DB: SELECT pending review_jobs (LIMIT 3, FOR UPDATE SKIP LOCKED)
+  CRON->>DB: UPDATE status=processing
+  CRON->>GHAPI: GET /repos/{owner}/{repo}/pulls/{number} (Accept: diff)
+  GHAPI-->>CRON: Unified diff text
+  CRON->>CRON: Parse diff → chunks (max 6000 tokens each)
+  CRON->>AI: generateContent (system prompt + diff chunk)
+  AI-->>CRON: Structured JSON review
+  CRON->>CRON: Merge chunk reviews, compute risk score
+  CRON->>GHAPI: POST /repos/{owner}/{repo}/pulls/{number}/reviews (with inline comments)
+  CRON->>DB: UPDATE review_jobs status=completed, store results
+```
+
+## Handling Long-Running Reviews on Serverless
+
+**Problem**: Even with Vercel Hobby's 300-second timeout (Fluid Compute, 4h active CPU/month), a very large PR with 15+ files could exhaust the budget or fail mid-processing.
+
+**Solution: `waitUntil` primary + Cron fallback**
+
+### Primary path: `waitUntil` in the webhook handler
+
+1. **Webhook handler** validates signature, deduplicates by delivery ID, inserts a `review_jobs` row with `status = 'pending'`, and returns `200 OK` in < 3s.
+2. Before returning, it calls `waitUntil(processReview(jobId))` via `@vercel/functions`. This runs the review in the background after the response is sent.
+3. The `processReview` function:
+   - Fetches the diff via Octokit (~1s).
+   - Chunks the diff (max 6000 tokens each).
+   - Processes chunks sequentially, each taking ~10-20s from Gemini.
+   - Uses a **250s hard deadline** (50s safety margin from 300s limit). If time runs out, it saves partial progress and exits.
+   - When all chunks complete, merges results, computes risk score, posts the GitHub review comment.
+4. With 250s budget and ~15s per chunk, a single invocation handles **~16 chunks** (covering most PRs).
+
+### Fallback path: Cron processor
+
+For jobs that didn't complete in `waitUntil` (very large PRs, or if the function was recycled):
+
+1. **Cron route** (`/api/cron/process-reviews`): Triggered by Vercel Cron every 2 minutes.
+2. Picks jobs with `status = 'processing'` that have been stale for > 3 minutes, or `status = 'pending'` (missed by `waitUntil`).
+3. Uses `SELECT ... FOR UPDATE SKIP LOCKED` to prevent duplicate processing.
+4. Resumes from the last completed chunk and continues with the same 250s budget.
+
+### Why this hybrid works
+
+- **Median latency < 30s**: Most PRs (< 5 files) finish in a single `waitUntil` call, giving near-instant reviews.
+- **No extra infrastructure**: Both paths use Vercel-native primitives.
+- **Graceful degradation**: The cron catches anything `waitUntil` misses.
+- **Free tier safe**: Fluid Compute only bills active CPU time. I/O wait (Gemini API latency) doesn't count, so typical usage stays well under 4h/month.
+
+**Why not Supabase Edge Functions**: Adds deployment complexity and a second runtime. The Vercel-only approach is simpler.
+
+## Failure Handling
+
+| Failure | Mitigation |
+|---|---|
+| Webhook handler crashes | GitHub retries webhooks (up to 3 times over hours). Idempotency key (delivery_id) prevents duplicates. |
+| Gemini API 429 (rate limit) | Exponential backoff. Job stays `processing`; next cron picks it up. Max 5 retries tracked in `review_jobs.retry_count`. |
+| Gemini API returns invalid JSON | Zod parse with `.safeParse()`. On failure, retry once with a stricter prompt. After 2 failures, mark job as `error` with reason. |
+| GitHub API token expired | Installation tokens last 1 hour. Always mint a fresh token per cron invocation via `@octokit/auth-app`. |
+| Cron function timeout | 50s deadline with try/finally that saves partial progress. Next invocation resumes. |
+| PR closed before review completes | Check PR state before posting. If closed/merged, mark job `skipped`. |
+| Database connection failure | Supabase client retries built-in. Job stays in current state; next cron picks it up. |
+
+## 5 Key Architecture Decisions
+
+### 1. Queue-in-DB instead of external queue (SQS, Redis, etc.)
+A `review_jobs` Postgres table with `SELECT ... FOR UPDATE SKIP LOCKED` acts as a job queue. **Why**: Zero additional infrastructure, free tier compatible, transactional with the rest of the data, and `SKIP LOCKED` prevents duplicate processing if cron overlaps.
+
+### 2. Gemini 3.8 Flash for reviews (not 3.5 Flash or Pro)
+`gemini-3.8-flash` is the most capable Flash model, free tier, 1M token context, structured output support. **Why**: Handles large diffs in a single call per chunk, reducing latency and API calls versus a less capable model that needs more retries.
+
+### 3. `waitUntil` primary + Vercel Cron fallback (not queue-only, not separate worker)
+The webhook handler uses `waitUntil` from `@vercel/functions` to process reviews in-band after responding, with Vercel Cron as a safety net for incomplete jobs. **Why**: Achieves < 30s median review latency, uses only Vercel-native primitives, and gracefully handles the 300s timeout by saving partial progress for the cron to resume.
+
+### 4. Supabase Auth with GitHub OAuth (not custom OAuth flow)
+Supabase Auth handles the OAuth dance, session tokens, and refresh. **Why**: Eliminates ~300 lines of auth code, provides secure cookie-based sessions via `@supabase/ssr`, and the GitHub provider gives us the user's GitHub identity for RLS.
+
+### 5. Structured output with JSON schema (not free-text parsing)
+Gemini's `responseJsonSchema` guarantees the response matches our Zod schema. **Why**: Eliminates fragile regex/markdown parsing, makes the review data type-safe end-to-end, and reduces post-processing code to a single `JSON.parse` + `z.parse`.
+
+## Technology Versions
+
+| Package | Version | Notes |
+|---|---|---|
+| `next` | ^15.x | App Router, Route Handlers |
+| `@supabase/ssr` | ^0.5.x | Server-side Supabase client for Next.js |
+| `@supabase/supabase-js` | ^2.x | Core Supabase client |
+| `@octokit/rest` | ^21.x | GitHub API client |
+| `@octokit/auth-app` | ^7.x | GitHub App authentication |
+| `@octokit/webhooks-methods` | ^5.x | Webhook signature verification |
+| `@google/genai` | ^1.x | Gemini API client |
+| `zod` | ^3.x | Runtime validation |
+| `@vercel/functions` | ^1.x | `waitUntil` for background processing |
+| `tailwindcss` | ^4.x | Styling |
+| `vitest` | ^3.x | Unit/integration tests |
+| `@playwright/test` | ^1.x | E2E tests |
