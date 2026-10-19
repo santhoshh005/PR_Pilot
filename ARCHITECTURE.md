@@ -46,7 +46,7 @@ sequenceDiagram
   WH->>DB: INSERT review_jobs (status=pending)
   WH-->>GH: 200 OK (< 3s)
 
-  Note over CRON: Vercel Cron (every 1 min) or<br/>on-demand invocation
+  Note over CRON: GitHub Actions Cron (every 5 min)<br/>calls /api/cron/process-reviews
   CRON->>DB: SELECT pending review_jobs (LIMIT 3, FOR UPDATE SKIP LOCKED)
   CRON->>DB: UPDATE status=processing
   CRON->>GHAPI: GET /repos/{owner}/{repo}/pulls/{number} (Accept: diff)
@@ -67,8 +67,8 @@ sequenceDiagram
 
 ### Primary path: `waitUntil` in the webhook handler
 
-1. **Webhook handler** validates signature, deduplicates by delivery ID, inserts a `review_jobs` row with `status = 'pending'`, and returns `200 OK` in < 3s.
-2. Before returning, it calls `waitUntil(processReview(jobId))` via `@vercel/functions`. This runs the review in the background after the response is sent.
+1. **Webhook handler** validates signature, deduplicates by delivery ID, inserts a `review_jobs` row (`id`) with `status = 'pending'`, and returns `200 OK` in < 3s with `{ "ok": true, "job_id": id }`.
+2. Before returning, it calls `waitUntil(processReview(id))` via `@vercel/functions`. Route handler sets `export const maxDuration = 300`. This runs the review in the background after the response is sent.
 3. The `processReview` function:
    - Fetches the diff via Octokit (~1s).
    - Chunks the diff (max 6000 tokens each).
@@ -81,19 +81,19 @@ sequenceDiagram
 
 For jobs that didn't complete in `waitUntil` (very large PRs, or if the function was recycled):
 
-1. **Cron route** (`/api/cron/process-reviews`): Triggered by Vercel Cron every 2 minutes.
-2. Picks jobs with `status = 'processing'` that have been stale for > 3 minutes, or `status = 'pending'` (missed by `waitUntil`).
+1. **Cron route** (`/api/cron/process-reviews`): Triggered by a GitHub Actions scheduled workflow (`.github/workflows/cron.yml`) every 5 minutes with `CRON_SECRET` header. (Vercel Cron is not used due to Hobby plan daily frequency restrictions).
+2. Route sets `export const maxDuration = 300`. Picks jobs with `status = 'processing'` that have been stale for > 3 minutes, or `status = 'pending'` (missed by `waitUntil`).
 3. Uses `SELECT ... FOR UPDATE SKIP LOCKED` to prevent duplicate processing.
-4. Resumes from the last completed chunk and continues with the same 250s budget.
+4. Resumes from the last completed chunk and continues with the same 250s hard deadline budget.
 
 ### Why this hybrid works
 
 - **Median latency < 30s**: Most PRs (< 5 files) finish in a single `waitUntil` call, giving near-instant reviews.
-- **No extra infrastructure**: Both paths use Vercel-native primitives.
+- **No extra infrastructure**: Uses Vercel Fluid Compute for execution and free GitHub Actions for the 5-minute schedule trigger.
 - **Graceful degradation**: The cron catches anything `waitUntil` misses.
 - **Free tier safe**: Fluid Compute only bills active CPU time. I/O wait (Gemini API latency) doesn't count, so typical usage stays well under 4h/month.
 
-**Why not Supabase Edge Functions**: Adds deployment complexity and a second runtime. The Vercel-only approach is simpler.
+**Why not Supabase Edge Functions**: Adds deployment complexity and a second runtime. The Vercel + GitHub Actions cron approach is simpler.
 
 ## Failure Handling
 
@@ -103,7 +103,7 @@ For jobs that didn't complete in `waitUntil` (very large PRs, or if the function
 | Gemini API 429 (rate limit) | Exponential backoff. Job stays `processing`; next cron picks it up. Max 5 retries tracked in `review_jobs.retry_count`. |
 | Gemini API returns invalid JSON | Zod parse with `.safeParse()`. On failure, retry once with a stricter prompt. After 2 failures, mark job as `error` with reason. |
 | GitHub API token expired | Installation tokens last 1 hour. Always mint a fresh token per cron invocation via `@octokit/auth-app`. |
-| Cron function timeout | 50s deadline with try/finally that saves partial progress. Next invocation resumes. |
+| Cron function timeout | 250s hard deadline (within maxDuration = 300) with try/finally saving partial progress to review_chunks. Next invocation resumes. |
 | PR closed before review completes | Check PR state before posting. If closed/merged, mark job `skipped`. |
 | Database connection failure | Supabase client retries built-in. Job stays in current state; next cron picks it up. |
 
@@ -115,14 +115,14 @@ A `review_jobs` Postgres table with `SELECT ... FOR UPDATE SKIP LOCKED` acts as 
 ### 2. Gemini 3.8 Flash for reviews (not 3.5 Flash or Pro)
 `gemini-3.8-flash` is the most capable Flash model, free tier, 1M token context, structured output support. **Why**: Handles large diffs in a single call per chunk, reducing latency and API calls versus a less capable model that needs more retries.
 
-### 3. `waitUntil` primary + Vercel Cron fallback (not queue-only, not separate worker)
-The webhook handler uses `waitUntil` from `@vercel/functions` to process reviews in-band after responding, with Vercel Cron as a safety net for incomplete jobs. **Why**: Achieves < 30s median review latency, uses only Vercel-native primitives, and gracefully handles the 300s timeout by saving partial progress for the cron to resume.
+### 3. `waitUntil` primary + GitHub Actions Cron fallback (not queue-only, not separate worker)
+The webhook handler uses `waitUntil` from `@vercel/functions` to process reviews in-band after responding, with a GitHub Actions 5-minute scheduled workflow as a safety net for incomplete jobs. **Why**: Achieves < 30s median review latency, avoids Vercel Hobby cron limitations, and gracefully handles the 300s timeout with a 250s deadline.
 
 ### 4. Supabase Auth with GitHub OAuth (not custom OAuth flow)
 Supabase Auth handles the OAuth dance, session tokens, and refresh. **Why**: Eliminates ~300 lines of auth code, provides secure cookie-based sessions via `@supabase/ssr`, and the GitHub provider gives us the user's GitHub identity for RLS.
 
 ### 5. Structured output with JSON schema (not free-text parsing)
-Gemini's `responseJsonSchema` guarantees the response matches our Zod schema. **Why**: Eliminates fragile regex/markdown parsing, makes the review data type-safe end-to-end, and reduces post-processing code to a single `JSON.parse` + `z.parse`.
+Gemini's `responseJsonSchema` guarantees the response matches our schema. **Why**: Eliminates fragile regex/markdown parsing, makes the review data type-safe end-to-end, and reduces post-processing code to a single `JSON.parse` + `z.parse`.
 
 ## Technology Versions
 
@@ -137,6 +137,7 @@ Gemini's `responseJsonSchema` guarantees the response matches our Zod schema. **
 | `@google/genai` | ^1.x | Gemini API client |
 | `zod` | ^3.x | Runtime validation |
 | `@vercel/functions` | ^1.x | `waitUntil` for background processing |
+| `recharts` | ^2.x | Dashboard metrics and trend charts |
 | `tailwindcss` | ^4.x | Styling |
 | `vitest` | ^3.x | Unit/integration tests |
 | `@playwright/test` | ^1.x | E2E tests |

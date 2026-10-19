@@ -133,7 +133,7 @@ This document covers all security threats specific to a GitHub App that processe
 
 **Mitigations**:
 - [ ] Store as `GEMINI_API_KEY` Vercel env var (not `NEXT_PUBLIC_` prefix).
-- [ ] Only used in server-side code (`src/lib/gemini.ts`).
+- [ ] Only used in server-side code (`src/lib/gemini/client.ts`).
 - [ ] Error messages from the Gemini client are sanitized before logging — strip any auth headers or key fragments.
 
 ---

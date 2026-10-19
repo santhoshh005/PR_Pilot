@@ -37,13 +37,16 @@ Receives GitHub App webhook events. Only `pull_request` events with actions `ope
 | `400` | `{ "error": "bad_request", "message": "<detail>", "status": 400 }` | Missing headers or invalid payload |
 | `500` | `{ "error": "internal", "message": "...", "status": 500 }` | Server error |
 
+*Note: `job_id` returned in the response corresponds directly to the `review_jobs.id` primary key.*
+*Route config: `export const maxDuration = 300` (Node.js runtime with 250s internal deadline for `waitUntil`).*
+
 ---
 
 ## 2. Cron — Process Reviews
 
 ### `POST /api/cron/process-reviews`
 
-Called by Vercel Cron every 2 minutes as a fallback for reviews not completed by `waitUntil`. Picks stale `processing` or missed `pending` jobs.
+Called every 5 minutes as a fallback for reviews not completed by `waitUntil` via a scheduled GitHub Actions workflow (`.github/workflows/cron.yml`). Vercel Cron is not used due to Hobby plan frequency limits. Picks stale `processing` (> 3 min) or missed `pending` jobs. Route sets `export const maxDuration = 300` with a 250s internal execution deadline.
 
 **Headers:**
 
@@ -62,17 +65,7 @@ Called by Vercel Cron every 2 minutes as a fallback for reviews not completed by
 | `401` | `{ "error": "unauthorized", ... }` | Invalid or missing CRON_SECRET |
 | `500` | `{ "error": "internal", ... }` | Processing error (partial work saved) |
 
-**Vercel Cron config** (`vercel.json`):
-```json
-{
-  "crons": [
-    {
-      "path": "/api/cron/process-reviews",
-      "schedule": "*/2 * * * *"
-    }
-  ]
-}
-```
+**Cron trigger:** Executed every 5 minutes (`*/5 * * * *`) via GitHub Actions scheduled workflow.
 
 ---
 
@@ -94,7 +87,7 @@ Supabase OAuth callback. Exchanges the authorization code for a session.
 | Status | Action |
 |---|---|
 | `303` | Redirect to `next` URL with session cookie set |
-| `303` | Redirect to `/auth/error` on failure |
+| `303` | Redirect to `/error` on failure |
 
 ### `POST /api/auth/signout`
 

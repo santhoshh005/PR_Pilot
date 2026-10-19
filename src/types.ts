@@ -47,6 +47,13 @@ export interface RepoSettings {
   updated_at: string;
 }
 
+export interface WebhookDelivery {
+  delivery_id: string;
+  event: string;
+  action: string;
+  received_at: string;
+}
+
 export type ReviewJobStatus =
   | "pending"
   | "processing"
@@ -108,7 +115,7 @@ export interface ReviewComment {
   review_id: string;
   file_path: string;
   line_number: number | null;
-  side: "LEFT" | "RIGHT";
+  side: "LEFT" | "RIGHT"; // AI schema omits side; posting always defaults side to "RIGHT"
   severity: Severity;
   title: string;
   body: string;
@@ -310,6 +317,20 @@ export interface RiskScoreTrend {
   review_count: number;
 }
 
+/** Dashboard: aggregated repo stats response */
+export interface RepoStatsResponse {
+  severity_breakdown: SeverityBreakdown[];
+  risk_trend: RiskScoreTrend[];
+  total_reviews: number;
+  avg_review_duration_ms: number;
+}
+
+/** Installation sync endpoint response */
+export interface InstallationSyncResponse {
+  installations: number;
+  repos: number;
+}
+
 // ============================================================
 // Diff parsing types
 // ============================================================
@@ -345,8 +366,8 @@ export const CONFIG = {
   MAX_CHUNKS_PER_INVOCATION: 3,
   /** Max retries for a failed review job */
   MAX_JOB_RETRIES: 5,
-  /** Cron function timeout budget in ms (50s of 60s limit) */
-  CRON_TIMEOUT_MS: 50_000,
+  /** Hard deadline budget in ms (250s of 300s limit) */
+  CRON_TIMEOUT_MS: 250_000,
   /** Gemini model name */
   GEMINI_MODEL: "gemini-3.8-flash" as const,
   /** Max inline comments per chunk */

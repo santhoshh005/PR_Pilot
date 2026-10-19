@@ -61,6 +61,10 @@ Provide your review as JSON matching the required schema.
 | `custom_instructions` | `repo_settings.custom_instructions` | `"Focus on SQL injection risks"` |
 | `file_path` | Parsed from diff | `"src/lib/parser.ts"` |
 | `diff_content` | Raw unified diff for this chunk | `"@@ -10,5 +10,8 @@\n ..."` |
+| `chunk_count` | Total chunks analyzed | `4` |
+| `review_duration` | Review wall-clock duration in seconds (`Math.round(review_duration_ms / 1000)`) | `18` |
+
+*Note: `review_duration` in comments is the milliseconds value (`review_duration_ms`) divided by 1000, rounded.*
 
 ### Strictness behavior
 
@@ -150,16 +154,75 @@ Posted as the PR review body on GitHub after all chunks are processed.
 ## Gemini API Configuration
 
 ```typescript
-{
+import { GoogleGenAI, Type } from "@google/genai";
+
+const ai = new GoogleGenAI({});
+
+const response = await ai.models.generateContent({
   model: "gemini-3.8-flash",
   contents: userPrompt,
   config: {
+    systemInstruction: SYSTEM_PROMPT,
     responseMimeType: "application/json",
-    responseJsonSchema: ChunkReviewResultSchema,  // from types.ts
+    responseJsonSchema: {
+      type: Type.OBJECT,
+      properties: {
+        chunk_summary: {
+          type: Type.STRING,
+          description: "Brief summary of what this chunk of code does",
+        },
+        comments: {
+          type: Type.ARRAY,
+          description: "Inline review comments for this chunk (max 20)",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              file_path: {
+                type: Type.STRING,
+                description: "Relative path of the file in the repo",
+              },
+              line_number: {
+                type: Type.INTEGER,
+                description: "Line number in the new (right) side of the diff",
+              },
+              severity: {
+                type: Type.STRING,
+                enum: ["critical", "warning", "suggestion", "praise"],
+                description: "Severity level of the issue",
+              },
+              title: {
+                type: Type.STRING,
+                description: "One-line summary of the finding (<=120 characters)",
+              },
+              body: {
+                type: Type.STRING,
+                description: "Detailed explanation of the issue and why it matters (<=1000 characters)",
+              },
+              suggestion: {
+                type: Type.STRING,
+                description: "Suggested replacement code, if applicable (<=500 characters)",
+              },
+            },
+            required: ["file_path", "line_number", "severity", "title", "body"],
+          },
+        },
+        severity_counts: {
+          type: Type.OBJECT,
+          properties: {
+            critical: { type: Type.INTEGER },
+            warning: { type: Type.INTEGER },
+            suggestion: { type: Type.INTEGER },
+            praise: { type: Type.INTEGER },
+          },
+          required: ["critical", "warning", "suggestion", "praise"],
+        },
+      },
+      required: ["chunk_summary", "comments", "severity_counts"],
+    },
     temperature: 0.2,        // low temperature for consistent reviews
     maxOutputTokens: 4096,
   },
-}
+});
 ```
 
 **Temperature 0.2**: Chosen for consistency — reviews should be deterministic and not creative. Higher temperatures cause the model to invent non-existent issues.

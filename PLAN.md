@@ -1,6 +1,6 @@
 # PRPilot — Build Plan
 
-16 tasks in dependency order. Each task is one Flash session.
+18 tasks in dependency order. Each task is one Flash session.
 
 ---
 
@@ -14,7 +14,7 @@
 - `tailwind.config.ts`
 - `.env.local.example` (all env vars from SECURITY.md with placeholder values)
 - `.gitignore` (add `.env.local`, `*.pem`)
-- `vercel.json` (cron config)
+- `vercel.json` (Vercel config)
 - `vitest.config.ts`
 - `playwright.config.ts`
 
@@ -29,7 +29,7 @@ pnpm add -D vitest @testing-library/react @testing-library/jest-dom @playwright/
 - `pnpm dev` starts without errors.
 - `pnpm test` runs (no tests yet, but Vitest config works).
 - Path alias `@/` resolves correctly.
-- `.env.local.example` lists all 8 env vars from SECURITY.md.
+- `.env.local.example` lists all 9 env vars from SECURITY.md.
 
 **Tests**: None (scaffolding only).
 
@@ -123,12 +123,12 @@ pnpm add -D vitest @testing-library/react @testing-library/jest-dom @playwright/
 - `src/app/api/webhook/route.ts` — Add payload validation and job creation after signature check
 
 **Files to create**:
-- `src/lib/review/processor.ts` — Stub with `processReview(jobId)` function (implementation in Task 8)
+- `src/lib/review/processor.ts` — Stub with `processReview(id)` function (implementation in Task 8)
 
 **Acceptance criteria**:
-- Valid `pull_request` payloads (opened/synchronize/reopened) create a `review_jobs` row with status `pending`.
-- The response includes the `job_id`.
-- The handler calls `waitUntil(processReview(jobId))` to trigger background processing.
+- Valid `pull_request` payloads (opened/synchronize/reopened) create a `review_jobs` row (`id`) with status `pending`.
+- The response includes `{ "ok": true, "job_id": id }` where `job_id` references `review_jobs.id`.
+- The handler calls `waitUntil(processReview(id))` to trigger background processing; route sets `export const maxDuration = 300`.
 - Invalid payloads (Zod validation failure) return 400.
 - Repos not found in the database are handled gracefully (repo may not be synced yet — log and return 200).
 
@@ -260,26 +260,29 @@ pnpm add -D vitest @testing-library/react @testing-library/jest-dom @playwright/
 
 ## Task 10: Cron Fallback Processor
 
-**Goal**: Implement the cron route that picks up incomplete/missed review jobs.
+**Goal**: Implement the cron route and GitHub Actions scheduled workflow that picks up incomplete/missed review jobs.
 
 **Files to create**:
 - `src/app/api/cron/process-reviews/route.ts`
 - `src/app/api/cron/process-reviews/route.test.ts`
+- `.github/workflows/cron.yml` — Scheduled GitHub Actions workflow running every 5 minutes
 
 **Acceptance criteria**:
 - Requires `Authorization: Bearer <CRON_SECRET>`.
+- Route sets `export const maxDuration = 300` with an internal 250s hard deadline budget.
 - Selects jobs with `status = 'processing'` stale for > 3 min, or `status = 'pending'`.
 - Uses `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 3`.
-- Calls `processReview()` for each job (reusing Task 8 logic).
-- Returns `{ "processed": N }`.
-- Does not process if no pending work.
+- Calls `processReview()` for each job (reusing Task 8 logic and Task 9 review posting).
+- Returns `{ "processed": N, "jobs": ["<id>", ...] }` matching API.md.
+- `.github/workflows/cron.yml` runs every 5 minutes (`*/5 * * * *`) and triggers the endpoint with `CRON_SECRET`.
+- Does not process if no pending work (`{ "processed": 0 }`).
 
 **Tests**:
 - Integration test: valid CRON_SECRET → processes pending jobs.
 - Integration test: invalid CRON_SECRET → 401.
 - Integration test: no pending jobs → `{ "processed": 0 }`.
 
-**Pitfalls**: The `FOR UPDATE SKIP LOCKED` query must use the Supabase service client with raw SQL (`rpc` or `.sql()`), since the PostgREST API doesn't support `FOR UPDATE SKIP LOCKED`. Use `supabase.rpc()` or a Postgres function.
+**Pitfalls**: The `FOR UPDATE SKIP LOCKED` query must use the Supabase service client with raw SQL (`rpc` or `.sql()`), since the PostgREST API doesn't support `FOR UPDATE SKIP LOCKED`. Use `supabase.rpc()` or a Postgres function. Vercel Cron is not used due to Hobby plan frequency limits; GitHub Actions scheduled workflow handles the 5-minute schedule.
 
 ---
 
@@ -469,13 +472,13 @@ pnpm add -D vitest @testing-library/react @testing-library/jest-dom @playwright/
 
 ---
 
-## Task 18: CI/CD & Deployment
+## Task 18: Project Setup & CI
 
-**Goal**: Set up GitHub Actions for CI and Vercel deployment.
+**Goal**: Prepare documentation, Vercel project configuration, and GitHub Actions CI. Deployment is handled natively via Vercel's GitHub integration on push to main.
 
 **Files to create**:
 - `.github/workflows/ci.yml` — Lint, type-check, unit tests, E2E tests
-- `.github/workflows/deploy.yml` — Deploy to Vercel on push to main
+- `README.md` — Project setup, Vercel project configuration, GitHub App configuration, and all 9 env vars
 
 **Files to edit**:
 - `package.json` — Add scripts: `lint`, `type-check`, `test`, `test:e2e`
@@ -483,9 +486,8 @@ pnpm add -D vitest @testing-library/react @testing-library/jest-dom @playwright/
 **Acceptance criteria**:
 - CI runs on every PR: `pnpm lint`, `tsc --noEmit`, `pnpm test`, `pnpm exec playwright test`.
 - CI installs Playwright browsers.
-- Deployment triggers on push to `main`.
-- Vercel env vars are configured (documented in README).
-- Cron job is active in production.
+- README clearly documents Vercel GitHub integration setup and all 9 environment variables from SECURITY.md.
+- GitHub Actions cron workflow (`.github/workflows/cron.yml` from Task 10) verified with `CRON_SECRET`.
 
 **Tests**: CI tests are meta-tests (testing the testing infrastructure).
 
@@ -507,17 +509,20 @@ graph TD
   T6 --> T8
   T7 --> T8
   T8 --> T9["Task 9: Review Poster"]
-  T8 --> T10["Task 10: Cron Fallback"]
+  T9 --> T10["Task 10: Cron Fallback"]
   T3 --> T11["Task 11: Installation Sync"]
   T6 --> T11
   T11 --> T12["Task 12: Dashboard API"]
-  T4 --> T13["Task 13: Rate Limiter"]
+  T3 --> T13["Task 13: Rate Limiter"]
+  T5 --> T13
+  T12 --> T13
   T12 --> T14["Task 14: UI - Layout + Repos"]
   T14 --> T15["Task 15: UI - Review + Settings"]
   T15 --> T16["Task 16: UI - Charts"]
   T16 --> T17["Task 17: E2E Tests"]
-  T17 --> T18["Task 18: CI/CD"]
+  T13 --> T18["Task 18: Project Setup & CI"]
+  T17 --> T18
 ```
 
 > [!IMPORTANT]
-> Tasks 6 and 7 can run in parallel with Tasks 3-5. Task 13 can run anytime after Task 4.
+> Tasks 6 and 7 can run in parallel with Tasks 3-5. Task 13 can run after Tasks 3, 5, and 12 are completed.

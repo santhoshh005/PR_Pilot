@@ -52,7 +52,7 @@ CREATE TABLE public.repo_settings (
   repo_id UUID NOT NULL UNIQUE REFERENCES public.repos(id) ON DELETE CASCADE,
   ignored_paths TEXT[] NOT NULL DEFAULT '{}',
   strictness TEXT NOT NULL DEFAULT 'balanced' CHECK (strictness IN ('relaxed', 'balanced', 'strict')),
-  custom_instructions TEXT DEFAULT '',
+  custom_instructions TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -93,7 +93,7 @@ CREATE TABLE public.review_chunks (
   chunk_index INTEGER NOT NULL,
   file_path TEXT NOT NULL,
   diff_content TEXT NOT NULL,
-  review_json JSONB,                 -- raw AI response (matches ReviewResult schema)
+  review_json JSONB,                 -- raw AI response (matches ChunkReviewResult schema)
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'processing', 'completed', 'error')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -124,7 +124,7 @@ CREATE TABLE public.review_comments (
   review_id UUID NOT NULL REFERENCES public.reviews(id) ON DELETE CASCADE,
   file_path TEXT NOT NULL,
   line_number INTEGER,
-  side TEXT DEFAULT 'RIGHT' CHECK (side IN ('LEFT', 'RIGHT')),
+  side TEXT NOT NULL DEFAULT 'RIGHT' CHECK (side IN ('LEFT', 'RIGHT')),
   severity TEXT NOT NULL CHECK (severity IN ('critical', 'warning', 'suggestion', 'praise')),
   title TEXT NOT NULL,
   body TEXT NOT NULL,
