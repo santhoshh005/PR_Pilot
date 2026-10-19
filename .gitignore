@@ -17,10 +17,13 @@
 
 # Environment files and credentials
 .env
+.env.local
 .env*.local
 .env.production
 .env.development
 *.pem
+/test-results
+/playwright-report
 
 # Logs
 npm-debug.log*
