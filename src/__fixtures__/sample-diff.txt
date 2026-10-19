@@ -1,0 +1,72 @@
+diff --git a/src/utils.ts b/src/utils.ts
+index 83db48f..bf269f4 100644
+--- a/src/utils.ts
++++ b/src/utils.ts
+@@ -5,6 +5,8 @@
+ export function formatHeader(title: string): string {
+   const trimmed = title.trim();
++  if (!trimmed) {
++    return "Default Header";
++  }
+   return `[HEADER] ${trimmed}`;
+ }
+ export const PI = 3.14;
+@@ -30,7 +32,9 @@
+ export function calculateRate(amount: number, factor: number): number {
+   if (factor <= 0) {
+     throw new Error("Invalid factor");
+   }
+-  return amount * factor;
++  const adjustedAmount = Math.max(0, amount);
++  const result = adjustedAmount * factor;
++  return result;
+ }
+ export const DEFAULT_RATE = 1.0;
+diff --git a/src/components/button.tsx b/src/components/button.tsx
+index 1234567..89abcdef 100644
+--- a/src/components/button.tsx
++++ b/src/components/button.tsx
+@@ -1,5 +1,8 @@
+ import React from 'react';
+ 
++interface ButtonProps {
++  label: string;
++}
+ export function Button({ label }: ButtonProps) {
+   return <button>{label}</button>;
+ }
+diff --git a/config/old-name.json b/config/new-name.json
+similarity index 90%
+rename from config/old-name.json
+rename to config/new-name.json
+index abcdef1..2345678 100644
+--- a/config/old-name.json
++++ b/config/new-name.json
+@@ -1,4 +1,4 @@
+ {
+   "name": "prpilot",
+-  "version": "0.1.0"
++  "version": "0.2.0"
+ }
+diff --git a/docs/deprecated.md b/docs/deprecated.md
+deleted file mode 100644
+index e69de29..0000000
+--- a/docs/deprecated.md
++++ /dev/null
+@@ -1,3 +0,0 @@
+-# Deprecated Documentation
+-This feature is no longer supported.
+-Please refer to v2 docs.
+diff --git a/assets/logo.png b/assets/logo.png
+index e69de29..49b6b80 100644
+Binary files a/assets/logo.png and b/assets/logo.png differ
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,2 @@
+ # PRPilot
+-Initial readme
+\ No newline at end of file
++Updated readme
+\ No newline at end of file
