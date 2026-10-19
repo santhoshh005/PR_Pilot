@@ -305,7 +305,7 @@ pnpm add -D vitest @testing-library/react @testing-library/jest-dom @playwright/
 - Integration test: mock Octokit → repos synced correctly.
 - Integration test: unauthenticated → 401.
 
-**Pitfalls**: To list user's installations, you need the App-level Octokit, then filter by the user's GitHub account. The user's `github_user_id` from `profiles` is used to match. Alternatively, if the user installed the app, the `installation.account.login` matches their GitHub username.
+**Pitfalls**: To list user's installations, you need the App-level Octokit, then filter by the user's GitHub account. The user's `github_user_id` from `profiles` is used to match. Alternatively, if the user installed the app, the `installation.account.login` matches their GitHub username. Note: installation sync matches personal accounts only, so organization installs are a known v1 limitation.
 
 ---
 
