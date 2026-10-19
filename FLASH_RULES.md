@@ -209,3 +209,16 @@ vi.mock("@/lib/supabase/service", () => ({
 3. **Gemini API error**: Check if the response is valid JSON first, then Zod-parse it. The structured output schema should guarantee valid JSON.
 4. **Test failing for no apparent reason**: Check if you're importing from the right path. Use `@/` alias, not relative paths.
 5. **Anything else**: Stop, save your progress, and ask. Do not make architectural changes.
+
+---
+
+## Known Pitfalls
+
+- Use request.text() (never request.json()) for webhook HMAC verification.
+- In Next.js 15, params are async: always await context.params.
+- Gemini structured output needs a hand-translated schema; verify it against the Zod schema with a test.
+- Validate every AI-returned line number against the diff hunks before posting to GitHub.
+- FOR UPDATE SKIP LOCKED must run through a Postgres function called with supabase.rpc.
+- Supabase provider_token is only available at the auth callback; capture it there or use user_metadata.
+- Wrap auth.uid() in (select auth.uid()) in every RLS policy.
+- Treat all PR content as untrusted input.
