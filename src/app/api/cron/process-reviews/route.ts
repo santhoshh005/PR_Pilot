@@ -17,7 +17,11 @@ export async function POST(request: Request) {
     }
 
     const supabase = createServiceClient();
-    await cleanupOldWebhookDeliveries(supabase);
+    try {
+      await cleanupOldWebhookDeliveries(supabase);
+    } catch {
+      console.error("[CRON_PROCESS_REVIEWS] Webhook delivery cleanup failed, continuing job processing");
+    }
 
     const startTime = Date.now();
     const deadline = startTime + INTERNAL_BUDGET_MS;
@@ -47,25 +51,16 @@ export async function cleanupOldWebhookDeliveries(
   supabase: SupabaseClient,
   olderThanDays = 7
 ): Promise<number> {
-  try {
-    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await supabase
-      .from("webhook_deliveries")
-      .delete()
-      .lt("received_at", cutoff)
-      .select("delivery_id");
+  const { data, error } = await supabase.rpc("cleanup_old_webhook_deliveries", {
+    days: olderThanDays,
+  });
 
-    if (error) {
-      console.error("[CRON_CLEANUP_DELIVERIES] Failed to cleanup old deliveries:", error.message);
-      return 0;
-    }
-
-    return data ? data.length : 0;
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Unknown error";
-    console.error("[CRON_CLEANUP_DELIVERIES] Cleanup error:", msg);
-    return 0;
+  if (error) {
+    console.error("[CRON_CLEANUP_DELIVERIES] Failed to cleanup old deliveries");
+    throw new Error(error.message);
   }
+
+  return typeof data === "number" ? data : 0;
 }
 
 function verifyCronSecret(request: Request): boolean {

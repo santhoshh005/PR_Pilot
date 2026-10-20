@@ -127,6 +127,20 @@ function createMockSupabaseClient() {
 
         return { data: claimed, error: null };
       }
+      if (fn === "cleanup_old_webhook_deliveries") {
+        const days = params?.days ?? 7;
+        const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        const referencedDeliveryIds = new Set(
+          mockDb.review_jobs.map((j) => j.delivery_id).filter(Boolean)
+        );
+        const toDelete = mockDb.webhook_deliveries.filter((d) =>
+          d.received_at < cutoff && !referencedDeliveryIds.has(d.delivery_id)
+        );
+        mockDb.webhook_deliveries = mockDb.webhook_deliveries.filter(
+          (d) => !toDelete.includes(d)
+        );
+        return { data: toDelete.length, error: null };
+      }
       return { data: null, error: null };
     },
   };
@@ -385,9 +399,12 @@ describe("POST /api/cron/process-reviews", () => {
         created_at: new Date().toISOString(),
       });
 
-      // Force cleanupOldWebhookDeliveries or RPC to throw
-      vi.spyOn(mockSupabase, "rpc").mockImplementationOnce(() => {
-        throw new Error("Internal secret postgres connection string: postgres://user:pass@host/db");
+      // Force claim_review_jobs to throw an unhandled internal error
+      vi.spyOn(mockSupabase, "rpc").mockImplementation(async (fn: string) => {
+        if (fn === "claim_review_jobs") {
+          throw new Error("Internal secret postgres connection string: postgres://user:pass@host/db");
+        }
+        return { data: null, error: null };
       });
 
       const req = new Request("http://localhost/api/cron/process-reviews", {
@@ -402,20 +419,78 @@ describe("POST /api/cron/process-reviews", () => {
       expect(body.message).toBeUndefined();
     });
 
-    it("cleanupOldWebhookDeliveries deletes rows older than 7 days and preserves newer ones", async () => {
+    it("cleanupOldWebhookDeliveries deletes unreferenced old deliveries and keeps referenced and recent deliveries", async () => {
       const now = Date.now();
       const tenDaysAgo = new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString();
       const twoDaysAgo = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString();
 
+      // deliv-unreferenced-old: > 7 days old, NOT referenced by any job -> deleted
+      // deliv-referenced-old: > 7 days old, referenced by a job -> kept
+      // deliv-recent: < 7 days old -> kept
       mockDb.webhook_deliveries = [
-        { delivery_id: "deliv-old", received_at: tenDaysAgo },
-        { delivery_id: "deliv-new", received_at: twoDaysAgo },
+        { delivery_id: "deliv-unreferenced-old", received_at: tenDaysAgo },
+        { delivery_id: "deliv-referenced-old", received_at: tenDaysAgo },
+        { delivery_id: "deliv-recent", received_at: twoDaysAgo },
       ];
 
-      await cleanupOldWebhookDeliveries(mockSupabase as any, 7);
+      mockDb.review_jobs = [
+        {
+          id: "job-ref-old",
+          delivery_id: "deliv-referenced-old",
+          status: "completed",
+          retry_count: 0,
+          created_at: tenDaysAgo,
+        },
+      ];
 
-      expect(mockDb.webhook_deliveries.length).toBe(1);
-      expect(mockDb.webhook_deliveries[0].delivery_id).toBe("deliv-new");
+      const deletedCount = await cleanupOldWebhookDeliveries(mockSupabase as any, 7);
+
+      expect(deletedCount).toBe(1);
+      expect(mockDb.webhook_deliveries.length).toBe(2);
+      const remainingIds = mockDb.webhook_deliveries.map((d) => d.delivery_id);
+      expect(remainingIds).toContain("deliv-referenced-old");
+      expect(remainingIds).toContain("deliv-recent");
+      expect(remainingIds).not.toContain("deliv-unreferenced-old");
+    });
+
+    it("cron route still processes jobs when cleanup throws an error", async () => {
+      vi.spyOn(mockSupabase, "rpc").mockImplementation(async (fn: string, params?: any) => {
+        if (fn === "cleanup_old_webhook_deliveries") {
+          return { data: null, error: new Error("RPC cleanup failed") as any };
+        }
+        if (fn === "claim_review_jobs") {
+          return {
+            data: [
+              {
+                id: "job-cleanup-fail-1",
+                repo_id: "repo-1",
+                pr_number: 10,
+                pr_title: "Cleanup resilient PR",
+                pr_author: "author1",
+                head_sha: "head1",
+                base_sha: "base1",
+                delivery_id: "deliv-1",
+                status: "processing",
+                retry_count: 0,
+                created_at: new Date().toISOString(),
+              },
+            ],
+            error: null,
+          };
+        }
+        return { data: null, error: null };
+      });
+
+      const req = new Request("http://localhost:3000/api/cron/process-reviews", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TEST_SECRET}` },
+      });
+
+      const res = await POST(req);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.processed).toBe(1);
+      expect(body.jobs).toHaveLength(1);
     });
   });
 });
