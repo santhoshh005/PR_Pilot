@@ -5,6 +5,7 @@ import {
   buildReviewSummaryBody,
   validateAndFilterComments,
   formatInlineComments,
+  findExistingReviewId,
   PostReviewParams,
 } from "./poster";
 import { FullReviewResult } from "@/types";
@@ -561,5 +562,55 @@ describe("postReviewToGitHub — Integration with Mocked Octokit", () => {
 
     expect(result.skippedClosedPr).toBe(true);
     expect(mockOctokit.rest.pulls.createReview).not.toHaveBeenCalled();
+  });
+
+  describe("Group C - Poster Review Lookup Pagination", () => {
+    it("paginates listReviews (per_page 100) until the marker is found on page 2", async () => {
+      // Page 1: 100 reviews without the marker
+      const page1Reviews = Array.from({ length: 100 }, (_, i) => ({
+        id: 1000 + i,
+        body: `Standard review comment ${i}`,
+      }));
+
+      // Page 2: Review with the marker
+      const targetReviewId = 99999;
+      const page2Reviews = [
+        {
+          id: targetReviewId,
+          body: `<!-- prpilot:repo:${dummyRepoId} --> Prior review summary`,
+        },
+      ];
+
+      mockOctokit.rest.pulls.listReviews
+        .mockResolvedValueOnce({ data: page1Reviews })
+        .mockResolvedValueOnce({ data: page2Reviews });
+
+      const foundId = await findExistingReviewId(
+        mockOctokit,
+        "acme",
+        "web-app",
+        42,
+        dummyRepoId
+      );
+
+      expect(foundId).toBe(targetReviewId);
+      expect(mockOctokit.rest.pulls.listReviews).toHaveBeenCalledTimes(2);
+
+      // Verify per_page: 100 and page numbers
+      expect(mockOctokit.rest.pulls.listReviews).toHaveBeenNthCalledWith(1, {
+        owner: "acme",
+        repo: "web-app",
+        pull_number: 42,
+        per_page: 100,
+        page: 1,
+      });
+      expect(mockOctokit.rest.pulls.listReviews).toHaveBeenNthCalledWith(2, {
+        owner: "acme",
+        repo: "web-app",
+        pull_number: 42,
+        per_page: 100,
+        page: 2,
+      });
+    });
   });
 });

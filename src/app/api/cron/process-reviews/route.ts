@@ -17,6 +17,8 @@ export async function POST(request: Request) {
     }
 
     const supabase = createServiceClient();
+    await cleanupOldWebhookDeliveries(supabase);
+
     const startTime = Date.now();
     const deadline = startTime + INTERNAL_BUDGET_MS;
 
@@ -35,11 +37,34 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error: "internal",
-        message: error instanceof Error ? error.message : "Unknown error",
-        status: 500,
       },
       { status: 500 }
     );
+  }
+}
+
+export async function cleanupOldWebhookDeliveries(
+  supabase: SupabaseClient,
+  olderThanDays = 7
+): Promise<number> {
+  try {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from("webhook_deliveries")
+      .delete()
+      .lt("received_at", cutoff)
+      .select("delivery_id");
+
+    if (error) {
+      console.error("[CRON_CLEANUP_DELIVERIES] Failed to cleanup old deliveries:", error.message);
+      return 0;
+    }
+
+    return data ? data.length : 0;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("[CRON_CLEANUP_DELIVERIES] Cleanup error:", msg);
+    return 0;
   }
 }
 
@@ -50,14 +75,13 @@ function verifyCronSecret(request: Request): boolean {
   if (!authHeader.startsWith("Bearer ")) return false;
 
   const token = authHeader.slice(7).trim();
-  const tokenBuf = Buffer.from(token);
-  const secretBuf = Buffer.from(secret);
+  if (!token) return false;
 
-  if (tokenBuf.length !== secretBuf.length) {
-    return false;
-  }
+  const key = "prpilot-cron-hmac-key";
+  const tokenHmac = crypto.createHmac("sha256", key).update(token).digest();
+  const secretHmac = crypto.createHmac("sha256", key).update(secret).digest();
 
-  return crypto.timingSafeEqual(tokenBuf, secretBuf);
+  return crypto.timingSafeEqual(tokenHmac, secretHmac);
 }
 
 async function processRunnableJobs(

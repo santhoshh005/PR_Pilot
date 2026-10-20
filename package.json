@@ -20,6 +20,7 @@
     "@supabase/supabase-js": "^2.118.0",
     "@vercel/functions": "^3.10.1",
     "next": "16.4.2",
+    "picomatch": "^4.0.7",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zod": "^4.6.7"
@@ -30,6 +31,7 @@
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^20",
+    "@types/picomatch": "^4.0.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

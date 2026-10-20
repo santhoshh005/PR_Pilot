@@ -601,7 +601,7 @@ async function handleJobRetryOrFailure(
   if (nextRetry < CONFIG.MAX_JOB_RETRIES) {
     await supabase
       .from("review_jobs")
-      .update({ status: "processing", retry_count: nextRetry })
+      .update({ status: "queued", retry_count: nextRetry })
       .eq("id", job.id);
   } else {
     await supabase

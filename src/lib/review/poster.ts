@@ -173,7 +173,7 @@ function filterAndCapComments(params: PostReviewParams) {
   );
 }
 
-async function findExistingReviewId(
+export async function findExistingReviewId(
   octokit: Octokit,
   owner: string,
   repo: string,
@@ -181,16 +181,32 @@ async function findExistingReviewId(
   repoId: string
 ): Promise<number | null> {
   const marker = `<!-- prpilot:repo:${repoId} -->`;
-  const { data: reviews } = await octokit.rest.pulls.listReviews({
-    owner,
-    repo,
-    pull_number: prNumber,
-  });
+  let page = 1;
 
-  for (const r of reviews) {
-    if (r.body && r.body.includes(marker)) {
-      return r.id;
+  while (true) {
+    const { data: reviews } = await octokit.rest.pulls.listReviews({
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 100,
+      page,
+    });
+
+    if (!reviews || reviews.length === 0) {
+      break;
     }
+
+    for (const r of reviews) {
+      if (r.body && r.body.includes(marker)) {
+        return r.id;
+      }
+    }
+
+    if (reviews.length < 100) {
+      break;
+    }
+
+    page++;
   }
 
   return null;

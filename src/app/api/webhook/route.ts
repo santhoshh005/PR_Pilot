@@ -101,7 +101,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ duplicate: true }, { status: 200 });
       }
 
-      console.error("Failed to record webhook delivery:", insertError.message);
+      console.error(`[WEBHOOK] Failed to record delivery for ${deliveryId}`);
       const errorResponse: ApiError = {
         error: "internal",
         message: "Failed to process webhook delivery",
@@ -172,7 +172,7 @@ export async function POST(request: Request) {
       .single();
 
     if (jobError || !job) {
-      console.error("Failed to enqueue review job:", jobError?.message);
+      console.error(`[WEBHOOK] Failed to enqueue review job for delivery ${deliveryId}`);
       // Clean up delivery row so GitHub automatic redelivery is not falsely rejected as duplicate
       await serviceClient
         .from("webhook_deliveries")

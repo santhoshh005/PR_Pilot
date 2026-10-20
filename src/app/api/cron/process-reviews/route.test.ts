@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { POST } from "./route";
+import { POST, cleanupOldWebhookDeliveries } from "./route";
 import * as processor from "@/lib/review/processor";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import fs from "node:fs";
@@ -9,12 +9,14 @@ import path from "node:path";
 let mockDb: {
   review_jobs: any[];
   daily_api_usage: any[];
+  webhook_deliveries: any[];
 };
 
 function resetMockDb() {
   mockDb = {
     review_jobs: [],
     daily_api_usage: [],
+    webhook_deliveries: [],
   };
 }
 
@@ -24,11 +26,20 @@ function createMockSupabaseClient() {
       let currentTable = mockDb[table as keyof typeof mockDb] || [];
       let filters: Array<(row: any) => boolean> = [];
       let pendingUpdate: any = null;
+      let isDelete = false;
 
       const chain: any = {
         select: () => chain,
         eq: (field: string, value: any) => {
           filters.push((row) => row[field] === value);
+          return chain;
+        },
+        lt: (field: string, value: any) => {
+          filters.push((row) => row[field] < value);
+          return chain;
+        },
+        delete: () => {
+          isDelete = true;
           return chain;
         },
         maybeSingle: async () => {
@@ -48,6 +59,15 @@ function createMockSupabaseClient() {
           return chain;
         },
         then: (resolve: any) => {
+          if (isDelete) {
+            const toDelete = currentTable.filter((row: any) =>
+              filters.every((f) => f(row))
+            );
+            mockDb[table as keyof typeof mockDb] = currentTable.filter(
+              (row: any) => !toDelete.includes(row)
+            );
+            return resolve({ data: toDelete, error: null });
+          }
           if (pendingUpdate) {
             currentTable.forEach((row: any) => {
               if (filters.every((f) => f(row))) {
@@ -326,6 +346,78 @@ describe("POST /api/cron/process-reviews", () => {
     expect(data.processed).toBe(1);
     expect(data.jobs).toEqual(["job-fast"]);
   });
+
+  describe("Group C - Hardening Tests (HMAC, Error Leak, Delivery Cleanup)", () => {
+    it("verifyCronSecret HMAC comparison rejects token of different length without timing leaks", async () => {
+      // Shorter token
+      const reqShort = new Request("http://localhost/api/cron/process-reviews", {
+        method: "POST",
+        headers: { Authorization: "Bearer short" },
+      });
+      const resShort = await POST(reqShort);
+      expect(resShort.status).toBe(401);
+
+      // Longer token
+      const reqLong = new Request("http://localhost/api/cron/process-reviews", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TEST_SECRET}-extra-long-suffix` },
+      });
+      const resLong = await POST(reqLong);
+      expect(resLong.status).toBe(401);
+
+      // Same length wrong token
+      const wrongSameLen = "x".repeat(TEST_SECRET.length);
+      const reqSameLen = new Request("http://localhost/api/cron/process-reviews", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${wrongSameLen}` },
+      });
+      const resSameLen = await POST(reqSameLen);
+      expect(resSameLen.status).toBe(401);
+    });
+
+    it("returns generic { error: 'internal' } on unhandled error and never leaks error.message", async () => {
+      vi.spyOn(processor, "processReview").mockRejectedValue(new Error("Sensitive internal DB stack trace"));
+
+      mockDb.review_jobs.push({
+        id: "job-crash",
+        status: "pending",
+        retry_count: 0,
+        created_at: new Date().toISOString(),
+      });
+
+      // Force cleanupOldWebhookDeliveries or RPC to throw
+      vi.spyOn(mockSupabase, "rpc").mockImplementationOnce(() => {
+        throw new Error("Internal secret postgres connection string: postgres://user:pass@host/db");
+      });
+
+      const req = new Request("http://localhost/api/cron/process-reviews", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TEST_SECRET}` },
+      });
+
+      const res = await POST(req);
+      expect(res.status).toBe(500);
+      const body = await res.json();
+      expect(body).toEqual({ error: "internal" });
+      expect(body.message).toBeUndefined();
+    });
+
+    it("cleanupOldWebhookDeliveries deletes rows older than 7 days and preserves newer ones", async () => {
+      const now = Date.now();
+      const tenDaysAgo = new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString();
+      const twoDaysAgo = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString();
+
+      mockDb.webhook_deliveries = [
+        { delivery_id: "deliv-old", received_at: tenDaysAgo },
+        { delivery_id: "deliv-new", received_at: twoDaysAgo },
+      ];
+
+      await cleanupOldWebhookDeliveries(mockSupabase as any, 7);
+
+      expect(mockDb.webhook_deliveries.length).toBe(1);
+      expect(mockDb.webhook_deliveries[0].delivery_id).toBe("deliv-new");
+    });
+  });
 });
 
 // Live integration test: parallel claims on real database using exact IDs
@@ -477,6 +569,7 @@ describe("Live parallel claims integration (Supabase RPC)", () => {
           .single();
         expect(postProfile).toBeTruthy();
       }
-    }
+    },
+    30000
   );
 });

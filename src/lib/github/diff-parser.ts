@@ -1,3 +1,4 @@
+import picomatch from "picomatch";
 import { DiffChunk, CONFIG } from "@/types";
 
 export interface DiffFetcherClient {
@@ -78,29 +79,34 @@ export async function fetchDiff(
   return response.data;
 }
 
+const MAX_IGNORED_PATTERNS = 100;
+const MAX_PATTERN_LENGTH = 300;
+
 /**
- * Checks if a file path matches any pattern in the ignored_paths list.
+ * Checks if a file path matches any pattern in the ignored_paths list using safe glob matching.
  */
 export function isPathIgnored(filePath: string, ignoredPaths: string[]): boolean {
-  if (!ignoredPaths || ignoredPaths.length === 0) {
+  if (!ignoredPaths || ignoredPaths.length === 0 || !filePath) {
     return false;
   }
-  return ignoredPaths.some((pattern) => matchGlob(filePath, pattern));
-}
 
-function matchGlob(filePath: string, pattern: string): boolean {
-  if (pattern === filePath) return true;
-  if (pattern.endsWith("/") && filePath.startsWith(pattern)) return true;
-  if (!pattern.includes("/") && filePath.endsWith("/" + pattern)) return true;
+  const safePatterns = ignoredPaths
+    .slice(0, MAX_IGNORED_PATTERNS)
+    .filter((p) => typeof p === "string" && p.length > 0 && p.length <= MAX_PATTERN_LENGTH);
 
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, ".*")
-    .replace(/(?<!\.)\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]");
+  if (safePatterns.length === 0) {
+    return false;
+  }
 
-  const regex = new RegExp(`^${escaped}$`);
-  return regex.test(filePath);
+  try {
+    const expandedPatterns = safePatterns.flatMap((p) =>
+      p.includes("/") ? [p] : [p, `**/${p}`]
+    );
+    const isMatch = picomatch(expandedPatterns, { dot: true });
+    return isMatch(filePath);
+  } catch {
+    return false;
+  }
 }
 
 /**

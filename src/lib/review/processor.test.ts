@@ -322,7 +322,7 @@ describe("Review Processor / Orchestrator", () => {
 
     const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
     expect(job?.retry_count).toBe(1);
-    expect(job?.status).toBe("processing");
+    expect(job?.status).toBe("queued");
 
     const goodChunk = mockDb.review_chunks.find((c) => c.file_path === "good.ts");
     const badChunk = mockDb.review_chunks.find((c) => c.file_path === "bad.ts");
@@ -654,7 +654,7 @@ describe("Review Processor / Orchestrator", () => {
     it("fails chunk immediately without calling Gemini when increment_daily_api_usage RPC fails", async () => {
       vi.spyOn(mockSupabase, "rpc").mockResolvedValueOnce({
         data: null,
-        error: new Error("RPC increment failure"),
+        error: new Error("RPC increment failure") as any,
       });
       const reviewChunkSpy = vi.spyOn(geminiReview, "reviewChunk");
 
@@ -737,6 +737,16 @@ describe("Review Processor / Orchestrator", () => {
       // Both redelivery jobs marked completed
       expect(mockDb.review_jobs.find((j) => j.id === secondJobId)?.status).toBe("completed");
       expect(mockDb.review_jobs.find((j) => j.id === thirdJobId)?.status).toBe("completed");
+    });
+
+    it("on chunk retry, sets job status back to queued, never processing", async () => {
+      vi.spyOn(geminiReview, "reviewChunk").mockRejectedValueOnce(new Error("Transient API error"));
+
+      await processReview(dummyJobId);
+
+      const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+      expect(job?.retry_count).toBe(1);
+      expect(job?.status).toBe("queued");
     });
   });
 });

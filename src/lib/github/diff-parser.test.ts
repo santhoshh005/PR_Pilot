@@ -6,6 +6,7 @@ import {
   parseDiff,
   getHunkLineNumbers,
   getFileLineNumbers,
+  isPathIgnored,
   DiffFetcherClient,
 } from "./diff-parser";
 
@@ -368,5 +369,30 @@ ${diffLines.join("\n")}
       .split("\n")
       .filter((l) => l.startsWith("-") || l.startsWith(" "));
     expect(oldLen).toBe(chunk2ContentOldLines.length);
+  });
+
+  describe("Group C - isPathIgnored with safe glob library (picomatch)", () => {
+    it("evaluates a pathological nested glob pattern quickly without ReDoS", () => {
+      const pathological = "a]]**/b]]**/c]]**/d]]**/e]]**/f]]**";
+      const start = Date.now();
+      const result = isPathIgnored("a/b/c/d/e/f/target.ts", [pathological]);
+      const durationMs = Date.now() - start;
+
+      expect(durationMs).toBeLessThan(50);
+      expect(typeof result).toBe("boolean");
+    });
+
+    it("caps pattern length and ignores oversized patterns (>300 chars)", () => {
+      const hugePattern = "a".repeat(400) + "/**";
+      const result = isPathIgnored("src/file.ts", [hugePattern]);
+      expect(result).toBe(false);
+    });
+
+    it("caps pattern count to 100", () => {
+      const manyPatterns = Array.from({ length: 150 }, (_, i) => `ignore_${i}.ts`);
+      // 101st pattern should be ignored by the slice cap
+      expect(isPathIgnored("ignore_120.ts", manyPatterns)).toBe(false);
+      expect(isPathIgnored("ignore_5.ts", manyPatterns)).toBe(true);
+    });
   });
 });

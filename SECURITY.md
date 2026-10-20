@@ -185,3 +185,11 @@ This document covers all security threats specific to a GitHub App that processe
 | `GEMINI_API_KEY` | Vercel | **Yes** | Gemini API key |
 | `CRON_SECRET` | Vercel | **Yes** | Protects cron endpoint |
 | `NEXT_PUBLIC_APP_URL` | Vercel | No | App base URL for OAuth redirects |
+
+---
+
+## Assumptions
+
+- **Webhook Body Size Limits**: Webhook body size enforcement relies on Vercel's platform-level 4.5 MB serverless request payload limit plus the application-level `Content-Length` header check.
+- **Endpoint Rate Limiting**: In-memory rate limiting across serverless instances is ineffective because serverless functions do not share memory. Rate limiting for webhook and cron endpoints is therefore deferred to Task 13 (Deployment and Observability) where distributed rate limiting with Upstash Redis will be integrated.
+
