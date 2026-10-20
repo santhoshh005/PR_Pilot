@@ -296,4 +296,77 @@ ${lines.join("\n")}
 
     expect(totalLinesFound).toBe(100);
   });
+
+  it("preserves continuous absolute line numbers in chunk 2 and subsequent chunks when a large file is split", () => {
+    // Generate diff with oldStart = 50, newStart = 100
+    // Contains context, removed, and added lines
+    const diffLines: string[] = [];
+    for (let i = 0; i < 15; i++) {
+      diffLines.push(` context line before ${i}`);
+    }
+    for (let i = 0; i < 20; i++) {
+      diffLines.push(`-removed old line ${i}`);
+    }
+    for (let i = 0; i < 35; i++) {
+      diffLines.push(`+added new line ${i} with sufficient padding to trigger chunking`);
+    }
+    for (let i = 0; i < 15; i++) {
+      diffLines.push(` context line after ${i}`);
+    }
+
+    const largeDiff = `diff --git a/mixed.ts b/mixed.ts
+--- a/mixed.ts
++++ b/mixed.ts
+@@ -50,50 +100,65 @@
+${diffLines.join("\n")}
+`;
+
+    // Split with low maxTokens to force multiple chunks
+    const chunks = parseDiff(largeDiff, { maxTokens: 120 });
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+
+    const chunk1Lines = Array.from(chunks[0].hunk_line_numbers || []).sort((a, b) => a - b);
+    const chunk2Lines = Array.from(chunks[1].hunk_line_numbers || []).sort((a, b) => a - b);
+
+    expect(chunk1Lines.length).toBeGreaterThan(0);
+    expect(chunk2Lines.length).toBeGreaterThan(0);
+
+    const chunk1EndLine = chunk1Lines[chunk1Lines.length - 1];
+    const chunk2StartLine = chunk2Lines[0];
+
+    // Assert that chunk 2's hunk_line_numbers starts exactly where chunk 1 ended (no gap, no overlap)
+    expect(chunk2StartLine).toBe(chunk1EndLine + 1);
+
+    // No overlap
+    for (const line of chunk1Lines) {
+      expect(chunks[1].hunk_line_numbers?.has(line)).toBe(false);
+    }
+
+    // Assert that chunk 2's content begins with a valid synthetic hunk header
+    const firstLineChunk2 = chunks[1].content.split("\n")[0];
+    const headerMatch = firstLineChunk2.match(/^@@ -(\d+),(\d+) \+(\d+),(\d+) @@/);
+    expect(headerMatch).not.toBeNull();
+
+    const [, oldStartStr, oldLenStr, newStartStr, newLenStr] = headerMatch!;
+    const oldStart = Number(oldStartStr);
+    const oldLen = Number(oldLenStr);
+    const newStart = Number(newStartStr);
+    const newLen = Number(newLenStr);
+
+    // whose newStart equals the first new-file line in that chunk
+    expect(newStart).toBe(chunk2StartLine);
+    expect(newLen).toBe(chunk2Lines.length);
+
+    // Check old-side counts too, including chunks that contain removed lines
+    const chunk1ContentLines = chunks[0].content
+      .split("\n")
+      .filter((l) => l.startsWith("-") || l.startsWith(" "));
+    const expectedChunk2OldStart = 50 + chunk1ContentLines.length;
+    expect(oldStart).toBe(expectedChunk2OldStart);
+
+    const chunk2ContentOldLines = chunks[1].content
+      .split("\n")
+      .filter((l) => l.startsWith("-") || l.startsWith(" "));
+    expect(oldLen).toBe(chunk2ContentOldLines.length);
+  });
 });

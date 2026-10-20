@@ -350,34 +350,73 @@ function splitLargeFile(
   let currentLines: string[] = [];
   let currentLineNumbers = new Set<number>();
   let currentIndex = startIndex;
+  let isContinuation = false;
+  let chunkOldStart = 0;
+  let chunkNewStart = 0;
+
+  const flush = () => {
+    if (currentLines.length === 0) return;
+    const finalLines = isContinuation
+      ? [formatContinuationHeader(currentLines, chunkOldStart, chunkNewStart), ...currentLines]
+      : currentLines;
+    chunks.push(flushChunk(currentIndex++, file.filePath, finalLines, currentLineNumbers));
+    currentLines = [];
+    currentLineNumbers = new Set();
+  };
 
   for (const hunk of file.hunks) {
     const hunkLines = hunk.rawText.split("\n");
     let currentNew = hunk.newStart;
+    let currentOld = hunk.oldStart;
 
-    for (const line of hunkLines) {
+    for (let i = 0; i < hunkLines.length; i++) {
+      const line = hunkLines[i];
+      if (i === 0 && line.startsWith("@@")) {
+        if (currentLines.length > 0) {
+          flush();
+          isContinuation = false;
+        }
+        currentLines.push(line);
+        continue;
+      }
+
       const lineLen = line.length + 1;
       const currentLen = currentLines.join("\n").length;
+      const headerAllowance = isContinuation ? 40 : 0;
 
-      if (currentLines.length > 0 && currentLen + lineLen > maxChars) {
-        chunks.push(flushChunk(currentIndex++, file.filePath, currentLines, currentLineNumbers));
-        currentLines = [];
-        currentLineNumbers = new Set();
+      if (currentLines.length > 0 && currentLen + lineLen + headerAllowance > maxChars) {
+        flush();
+        isContinuation = true;
+        chunkOldStart = currentOld;
+        chunkNewStart = currentNew;
       }
 
       currentLines.push(line);
-      if (line.startsWith("+") || line.startsWith(" ")) {
+      if (line.startsWith("+")) {
         currentLineNumbers.add(currentNew);
         currentNew++;
+      } else if (line.startsWith("-")) {
+        currentOld++;
+      } else if (line.startsWith(" ")) {
+        currentLineNumbers.add(currentNew);
+        currentNew++;
+        currentOld++;
       }
+    }
+
+    if (currentLines.length > 0) {
+      flush();
+      isContinuation = false;
     }
   }
 
-  if (currentLines.length > 0) {
-    chunks.push(flushChunk(currentIndex, file.filePath, currentLines, currentLineNumbers));
-  }
-
   return chunks;
+}
+
+function formatContinuationHeader(lines: string[], oldStart: number, newStart: number): string {
+  const oldLen = lines.filter((l) => l.startsWith("-") || l.startsWith(" ")).length;
+  const newLen = lines.filter((l) => l.startsWith("+") || l.startsWith(" ")).length;
+  return `@@ -${oldStart},${oldLen} +${newStart},${newLen} @@`;
 }
 
 function flushChunk(
