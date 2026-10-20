@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-let mockUser: { id: string; user_metadata?: any; email?: string } | null = null;
+let mockUser: { id: string; user_metadata?: Record<string, unknown>; email?: string } | null = null;
 const mockRedirect = vi.fn();
 
 vi.mock("next/navigation", () => ({
@@ -40,7 +40,7 @@ describe("DashboardLayout", { timeout: 15000 }, () => {
     mockUser = null;
     const { default: DashboardLayout } = await import("./layout");
 
-    await DashboardLayout({ children: <div>Child Content</div> } as any);
+    await DashboardLayout({ children: <div>Child Content</div> });
     expect(mockRedirect).toHaveBeenCalledWith("/login");
   });
 
@@ -49,7 +49,7 @@ describe("DashboardLayout", { timeout: 15000 }, () => {
 
     const Component = await DashboardLayout({
       children: <div data-testid="test-child">Dashboard Main Content</div>,
-    } as any);
+    });
 
     render(Component);
 

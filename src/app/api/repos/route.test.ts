@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 let currentUser: { id: string } | null = null;
-let mockReposData: any[] = [];
-let mockReviewsData: any[] = [];
+let mockReposData: Record<string, unknown>[] = [];
+let mockReviewsData: Record<string, unknown>[] = [];
 
 const mockUserClient = {
   auth: {
@@ -17,6 +17,7 @@ const mockUserClient = {
     let orderCol: string | null = null;
     let isAsc = true;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase query builder mock chaining interface
     const chain: any = {
       select: () => chain,
       order: (col: string, options?: { ascending?: boolean }) => {
@@ -24,13 +25,13 @@ const mockUserClient = {
         isAsc = options?.ascending ?? true;
         return chain;
       },
-      then: (resolve: any) => {
+      then: (resolve: (val: unknown) => void) => {
         if (table === "repos") {
-          let sorted = [...mockReposData];
+          const sorted = [...mockReposData];
           if (orderCol) {
             sorted.sort((a, b) => {
-              const valA = a[orderCol!];
-              const valB = b[orderCol!];
+              const valA = String(a[orderCol!] ?? "");
+              const valB = String(b[orderCol!] ?? "");
               return isAsc ? (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
             });
           }
@@ -118,13 +119,13 @@ describe("GET /api/repos", () => {
     const body = await res.json();
 
     expect(body.repos).toHaveLength(2);
-    const r1 = body.repos.find((r: any) => r.id === "repo-uuid-1");
+    const r1 = body.repos.find((r: { id: string }) => r.id === "repo-uuid-1");
     expect(r1).toBeDefined();
     expect(r1.total_reviews).toBe(2);
     expect(r1.avg_risk_score).toBe(60);
     expect(r1.last_review_at).toBe("2026-10-19T12:00:00Z");
 
-    const r2 = body.repos.find((r: any) => r.id === "repo-uuid-2");
+    const r2 = body.repos.find((r: { id: string }) => r.id === "repo-uuid-2");
     expect(r2).toBeDefined();
     expect(r2.total_reviews).toBe(0);
     expect(r2.avg_risk_score).toBeNull();

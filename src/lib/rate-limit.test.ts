@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createServiceClient } from "./supabase/service";
 import {
   getClientIp,
   hashKey,
@@ -82,7 +83,7 @@ describe("Rate Limiting Utilities", () => {
         }),
       };
 
-      const result = await checkRateLimit("test-key", 60, 60, { client: mockClient as any });
+      const result = await checkRateLimit("test-key", 60, 60, { client: mockClient as unknown as ReturnType<typeof createServiceClient> });
       expect(result.allowed).toBe(true);
       expect(result.remaining).toBe(59);
       expect(result.retryAfter).toBe(0);
@@ -101,7 +102,7 @@ describe("Rate Limiting Utilities", () => {
         }),
       };
 
-      const result = await checkRateLimit("test-key", 60, 60, { client: mockClient as any });
+      const result = await checkRateLimit("test-key", 60, 60, { client: mockClient as unknown as ReturnType<typeof createServiceClient> });
       expect(result.allowed).toBe(false);
       expect(result.remaining).toBe(0);
       expect(result.retryAfter).toBe(30);
@@ -115,7 +116,7 @@ describe("Rate Limiting Utilities", () => {
         }),
       };
 
-      const result = await checkRateLimit("test-key", 60, 60, { client: mockClient as any });
+      const result = await checkRateLimit("test-key", 60, 60, { client: mockClient as unknown as ReturnType<typeof createServiceClient> });
       expect(result.allowed).toBe(true);
       expect(result.remaining).toBe(1);
       expect(result.retryAfter).toBe(0);
@@ -129,7 +130,7 @@ describe("Rate Limiting Utilities", () => {
         }),
       };
 
-      const result = await checkRateLimit("test-key", 60, 60, { client: mockClient as any, failOpen: false });
+      const result = await checkRateLimit("test-key", 60, 60, { client: mockClient as unknown as ReturnType<typeof createServiceClient>, failOpen: false });
       expect(result.allowed).toBe(false);
       expect(result.remaining).toBe(0);
       expect(result.retryAfter).toBe(60);
@@ -212,7 +213,7 @@ describe("Rate Limiting Utilities", () => {
         }),
       };
 
-      await checkWebhookRateLimit(req, mockClient as any);
+      await checkWebhookRateLimit(req, mockClient as unknown as ReturnType<typeof createServiceClient>);
       expect(mockClient.rpc).toHaveBeenCalledWith("check_rate_limit", {
         p_key: expect.stringMatching(/^webhook:[a-f0-9]{32}$/),
         p_limit: 60,
@@ -228,7 +229,7 @@ describe("Rate Limiting Utilities", () => {
         }),
       };
 
-      await checkDashboardRateLimit("user-uuid-123", mockClient as any);
+      await checkDashboardRateLimit("user-uuid-123", mockClient as unknown as ReturnType<typeof createServiceClient>);
       expect(mockClient.rpc).toHaveBeenCalledWith("check_rate_limit", {
         p_key: expect.stringMatching(/^dashboard:[a-f0-9]{32}$/),
         p_limit: 30,
@@ -247,7 +248,7 @@ describe("Rate Limiting Utilities", () => {
         }),
       };
 
-      await checkCronRateLimit(req, mockClient as any);
+      await checkCronRateLimit(req, mockClient as unknown as ReturnType<typeof createServiceClient>);
       expect(mockClient.rpc).toHaveBeenCalledWith("check_rate_limit", {
         p_key: expect.stringMatching(/^cron:[a-f0-9]{32}$/),
         p_limit: 1,
@@ -266,7 +267,7 @@ describe("Rate Limiting Utilities", () => {
         }),
       };
 
-      await checkAuthRateLimit(req, mockClient as any);
+      await checkAuthRateLimit(req, mockClient as unknown as ReturnType<typeof createServiceClient>);
       expect(mockClient.rpc).toHaveBeenCalledWith("check_rate_limit", {
         p_key: expect.stringMatching(/^auth:[a-f0-9]{32}$/),
         p_limit: 10,

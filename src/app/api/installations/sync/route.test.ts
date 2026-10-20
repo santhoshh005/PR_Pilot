@@ -72,24 +72,25 @@ const mockUserClient = {
 function createMockServiceClient() {
   return {
     from: (table: string) => {
-      let currentTable = mockDb[table as keyof typeof mockDb] as any[];
-      let filters: Array<(row: any) => boolean> = [];
+      const currentTable = ((mockDb as unknown as Record<string, Record<string, unknown>[]>)[table] || []) as Record<string, unknown>[];
+      const filters: Array<(row: Record<string, unknown>) => boolean> = [];
       let isDelete = false;
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase query builder mock chaining interface
       const chain: any = {
         select: () => chain,
-        eq: (field: string, value: any) => {
+        eq: (field: string, value: unknown) => {
           filters.push((row) => row[field] === value);
           return chain;
         },
         single: async () => {
-          const rows = currentTable.filter((row: any) =>
+          const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           return { data: rows[0] || null, error: rows.length ? null : new Error("Not found") };
         },
         maybeSingle: async () => {
-          const rows = currentTable.filter((row: any) =>
+          const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           return { data: rows[0] || null, error: null };
@@ -98,12 +99,12 @@ function createMockServiceClient() {
           isDelete = true;
           return chain;
         },
-        upsert: (values: any, options?: { onConflict?: string; ignoreDuplicates?: boolean }) => {
+        upsert: (values: Record<string, unknown> | Record<string, unknown>[], options?: { onConflict?: string; ignoreDuplicates?: boolean }) => {
           const onConflict = options?.onConflict;
           const ignoreDuplicates = options?.ignoreDuplicates;
           const rowsToUpsert = Array.isArray(values) ? values : [values];
 
-          const upsertedRows: any[] = [];
+          const upsertedRows: Record<string, unknown>[] = [];
           for (const item of rowsToUpsert) {
             const conflictKey = onConflict || "id";
             const existingIdx = currentTable.findIndex(
@@ -130,27 +131,28 @@ function createMockServiceClient() {
             }
           }
 
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase query builder mock chaining interface
           const upsertChain: any = {
             select: () => upsertChain,
             single: async () => ({
               data: upsertedRows[0] || null,
               error: null,
             }),
-            then: (resolve: any) => resolve({ data: upsertedRows, error: null }),
+            then: (resolve: (val: unknown) => void) => resolve({ data: upsertedRows, error: null }),
           };
           return upsertChain;
         },
-        then: (resolve: any) => {
+        then: (resolve: (val: unknown) => void) => {
           if (isDelete) {
-            const toDelete = currentTable.filter((row: any) =>
+            const toDelete = currentTable.filter((row) =>
               filters.every((f) => f(row))
             );
-            (mockDb as any)[table] = currentTable.filter(
-              (row: any) => !toDelete.includes(row)
+            (mockDb as unknown as Record<string, Record<string, unknown>[]>)[table] = currentTable.filter(
+              (row) => !toDelete.includes(row)
             );
             return resolve({ data: toDelete, error: null });
           }
-          const rows = currentTable.filter((row: any) =>
+          const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           return resolve({ data: rows, error: null });
@@ -182,7 +184,7 @@ vi.mock("@/lib/github/app", () => ({
       },
     },
   })),
-  getInstallationOctokit: vi.fn((_id: number) => ({
+  getInstallationOctokit: vi.fn(() => ({
     rest: {
       apps: {
         listReposAccessibleToInstallation: mockListReposAccessibleToInstallation,
@@ -513,7 +515,7 @@ describe("POST /api/installations/sync", () => {
 describe("Live Supabase Integration - Sync Idempotency", () => {
   function getLiveConfig() {
     const envPath = path.resolve(process.cwd(), ".env.local");
-    let fileEnv: Record<string, string> = {};
+    const fileEnv: Record<string, string> = {};
 
     if (fs.existsSync(envPath)) {
       const raw = fs.readFileSync(envPath, "utf8");

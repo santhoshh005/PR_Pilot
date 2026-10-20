@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 let currentUser: { id: string } | null = null;
-let mockRepos: any[] = [];
-let mockReviews: any[] = [];
-let mockComments: any[] = [];
+let mockRepos: Record<string, unknown>[] = [];
+let mockReviews: Record<string, unknown>[] = [];
+let mockComments: Record<string, unknown>[] = [];
 
 const mockUserClient = {
   auth: {
@@ -15,11 +15,12 @@ const mockUserClient = {
     }),
   },
   from: (table: string) => {
-    let filters: Array<(row: any) => boolean> = [];
+    const filters: Array<(row: Record<string, unknown>) => boolean> = [];
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase query builder mock chaining interface
     const chain: any = {
       select: () => chain,
-      eq: (col: string, val: any) => {
+      eq: (col: string, val: unknown) => {
         filters.push((row) => row[col] === val);
         return chain;
       },
@@ -34,7 +35,7 @@ const mockUserClient = {
         const rows = source.filter((r) => filters.every((f) => f(r)));
         return { data: rows[0] || null, error: null };
       },
-      then: (resolve: any) => {
+      then: (resolve: (val: unknown) => void) => {
         const source =
           table === "repos"
             ? mockRepos

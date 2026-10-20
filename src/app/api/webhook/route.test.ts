@@ -13,7 +13,10 @@ vi.mock("@vercel/functions", () => ({
   },
 }));
 
-const mockProcessReview = vi.fn((_id: string) => Promise.resolve());
+const mockProcessReview = vi.fn((id?: string) => {
+  void id;
+  return Promise.resolve();
+});
 vi.mock("@/lib/review/processor", () => ({
   processReview: (id: string) => mockProcessReview(id),
 }));

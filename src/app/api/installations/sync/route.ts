@@ -25,7 +25,8 @@ interface GitHubRepo {
   private?: boolean;
 }
 
-export async function POST(request: Request) {
+export async function POST(request?: Request) {
+  void request;
   try {
     // 1. Authenticate user using getUser() (never getSession())
     const userClient = await createUserClient();
@@ -226,9 +227,10 @@ export async function POST(request: Request) {
       },
       { status: 200 }
     );
-  } catch (error: any) {
-    if (error?.status === 403 || error?.status === 429) {
-      console.warn("[INSTALLATIONS_SYNC] GitHub rate limit encountered:", error?.message);
+  } catch (error: unknown) {
+    const err = error as { status?: number; message?: string } | null;
+    if (err?.status === 403 || err?.status === 429) {
+      console.warn("[INSTALLATIONS_SYNC] GitHub rate limit encountered:", err?.message);
       const errorResponse: ApiError = {
         error: "rate_limit_exceeded",
         message: "GitHub rate limit exceeded. Please try again later.",

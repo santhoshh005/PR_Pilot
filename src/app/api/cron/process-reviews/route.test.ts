@@ -6,10 +6,28 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Mock in-memory DB for unit/route tests
+interface MockReviewJob {
+  id: string;
+  status: string;
+  retry_count: number;
+  delivery_id?: string;
+  started_at?: string;
+  error_message?: string | null;
+  completed_at?: string;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+interface MockWebhookDelivery {
+  delivery_id: string;
+  received_at: string;
+  [key: string]: unknown;
+}
+
 let mockDb: {
-  review_jobs: any[];
-  daily_api_usage: any[];
-  webhook_deliveries: any[];
+  review_jobs: MockReviewJob[];
+  daily_api_usage: Record<string, unknown>[];
+  webhook_deliveries: MockWebhookDelivery[];
 };
 
 function resetMockDb() {
@@ -23,19 +41,20 @@ function resetMockDb() {
 function createMockSupabaseClient() {
   return {
     from: (table: string) => {
-      let currentTable = mockDb[table as keyof typeof mockDb] || [];
-      let filters: Array<(row: any) => boolean> = [];
-      let pendingUpdate: any = null;
+      const currentTable = (mockDb[table as keyof typeof mockDb] || []) as Record<string, unknown>[];
+      const filters: Array<(row: Record<string, unknown>) => boolean> = [];
+      let pendingUpdate: Record<string, unknown> | null = null;
       let isDelete = false;
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase query builder mock chaining interface
       const chain: any = {
         select: () => chain,
-        eq: (field: string, value: any) => {
+        eq: (field: string, value: unknown) => {
           filters.push((row) => row[field] === value);
           return chain;
         },
-        lt: (field: string, value: any) => {
-          filters.push((row) => row[field] < value);
+        lt: (field: string, value: unknown) => {
+          filters.push((row) => (row[field] as number | string) < (value as number | string));
           return chain;
         },
         delete: () => {
@@ -43,40 +62,40 @@ function createMockSupabaseClient() {
           return chain;
         },
         maybeSingle: async () => {
-          const rows = currentTable.filter((row: any) =>
+          const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           return { data: rows[0] || null, error: null };
         },
         single: async () => {
-          const rows = currentTable.filter((row: any) =>
+          const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           return { data: rows[0] || null, error: rows.length ? null : new Error("Not found") };
         },
-        update: (values: any) => {
+        update: (values: Record<string, unknown>) => {
           pendingUpdate = values;
           return chain;
         },
-        then: (resolve: any) => {
+        then: (resolve: (val: unknown) => void) => {
           if (isDelete) {
-            const toDelete = currentTable.filter((row: any) =>
+            const toDelete = currentTable.filter((row) =>
               filters.every((f) => f(row))
             );
-            mockDb[table as keyof typeof mockDb] = currentTable.filter(
-              (row: any) => !toDelete.includes(row)
+            (mockDb as unknown as Record<string, unknown[]>)[table] = currentTable.filter(
+              (row) => !toDelete.includes(row)
             );
             return resolve({ data: toDelete, error: null });
           }
           if (pendingUpdate) {
-            currentTable.forEach((row: any) => {
+            currentTable.forEach((row) => {
               if (filters.every((f) => f(row))) {
                 Object.assign(row, pendingUpdate);
               }
             });
             return resolve({ data: null, error: null });
           }
-          const rows = currentTable.filter((row: any) =>
+          const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           return resolve({ data: rows, error: null });
@@ -84,12 +103,12 @@ function createMockSupabaseClient() {
       };
       return chain;
     },
-    rpc: async (fn: string, params?: any) => {
+    rpc: async (fn: string, params?: Record<string, unknown>): Promise<{ data: unknown; error: unknown }> => {
       if (fn === "claim_review_jobs") {
-        const claimLimit = params?.claim_limit ?? 3;
-        const staleSeconds = params?.stale_seconds ?? 180;
+        const claimLimit = (params?.claim_limit as number | undefined) ?? 3;
+        const staleSeconds = (params?.stale_seconds as number | undefined) ?? 180;
         const includeDeferred = params?.include_deferred ?? false;
-        const maxRetries = params?.max_retries ?? 5;
+        const maxRetries = (params?.max_retries as number | undefined) ?? 5;
         const now = Date.now();
 
         // 1. Mark jobs exceeding max_retries as failed
@@ -128,7 +147,7 @@ function createMockSupabaseClient() {
         return { data: claimed, error: null };
       }
       if (fn === "cleanup_old_webhook_deliveries") {
-        const days = params?.days ?? 7;
+        const days = Number(params?.days ?? 7);
         const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
         const referencedDeliveryIds = new Set(
           mockDb.review_jobs.map((j) => j.delivery_id).filter(Boolean)
@@ -341,7 +360,7 @@ describe("POST /api/cron/process-reviews", () => {
     );
 
     let calls = 0;
-    vi.spyOn(processor, "processReview").mockImplementation(async (id: string) => {
+    vi.spyOn(processor, "processReview").mockImplementation(async () => {
       calls++;
       // Fast forward time past the 250s budget
       vi.spyOn(Date, "now").mockReturnValue(Date.now() + 230_000);
@@ -443,7 +462,7 @@ describe("POST /api/cron/process-reviews", () => {
         },
       ];
 
-      const deletedCount = await cleanupOldWebhookDeliveries(mockSupabase as any, 7);
+      const deletedCount = await cleanupOldWebhookDeliveries(mockSupabase as unknown as SupabaseClient, 7);
 
       expect(deletedCount).toBe(1);
       expect(mockDb.webhook_deliveries.length).toBe(2);
@@ -454,9 +473,18 @@ describe("POST /api/cron/process-reviews", () => {
     });
 
     it("cron route still processes jobs when cleanup throws an error", async () => {
-      vi.spyOn(mockSupabase, "rpc").mockImplementation(async (fn: string, params?: any) => {
+      vi.spyOn(mockSupabase, "rpc").mockImplementation(async (fn: string): Promise<{ data: unknown; error: unknown }> => {
         if (fn === "cleanup_old_webhook_deliveries") {
-          return { data: null, error: new Error("RPC cleanup failed") as any };
+          return {
+            data: null,
+            error: Object.assign(new Error("RPC cleanup failed"), {
+              name: "PostgrestError",
+              message: "RPC cleanup failed",
+              details: "",
+              hint: "",
+              code: "500",
+            }),
+          };
         }
         if (fn === "claim_review_jobs") {
           return {
@@ -524,7 +552,7 @@ describe("POST /api/cron/process-reviews", () => {
 describe("Live parallel claims integration (Supabase RPC)", () => {
   function getLiveConfig() {
     const envPath = path.resolve(process.cwd(), ".env.local");
-    let fileEnv: Record<string, string> = {};
+    const fileEnv: Record<string, string> = {};
 
     if (fs.existsSync(envPath)) {
       const raw = fs.readFileSync(envPath, "utf8");
@@ -647,8 +675,8 @@ describe("Live parallel claims integration (Supabase RPC)", () => {
         expect(claim1.error).toBeNull();
         expect(claim2.error).toBeNull();
 
-        const claimed1Ids = (claim1.data || []).map((j: any) => j.id);
-        const claimed2Ids = (claim2.data || []).map((j: any) => j.id);
+        const claimed1Ids = (claim1.data || []).map((j: { id: string }) => j.id);
+        const claimed2Ids = (claim2.data || []).map((j: { id: string }) => j.id);
 
         // Disjoint sets: parallel claims must never claim the same job
         const overlap = claimed1Ids.filter((id: string) => claimed2Ids.includes(id));

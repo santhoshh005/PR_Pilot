@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 let currentUser: { id: string } | null = null;
-let mockRepos: any[] = [];
-let mockReviews: any[] = [];
+let mockRepos: Record<string, unknown>[] = [];
+let mockReviews: Record<string, unknown>[] = [];
 
 const mockUserClient = {
   auth: {
@@ -14,17 +14,18 @@ const mockUserClient = {
     }),
   },
   from: (table: string) => {
-    let filters: Array<(row: any) => boolean> = [];
+    const filters: Array<(row: Record<string, unknown>) => boolean> = [];
     let limitVal: number | null = null;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase query builder mock chaining interface
     const chain: any = {
       select: () => chain,
-      eq: (col: string, val: any) => {
+      eq: (col: string, val: unknown) => {
         filters.push((row) => row[col] === val);
         return chain;
       },
-      gte: (col: string, val: any) => {
-        filters.push((row) => row[col] >= val);
+      gte: (col: string, val: unknown) => {
+        filters.push((row) => (row[col] as number | string) >= (val as number | string));
         return chain;
       },
       order: () => chain,
@@ -36,7 +37,7 @@ const mockUserClient = {
         const rows = mockRepos.filter((r) => filters.every((f) => f(r)));
         return { data: rows[0] || null, error: null };
       },
-      then: (resolve: any) => {
+      then: (resolve: (val: unknown) => void) => {
         if (table === "repos") {
           let rows = mockRepos.filter((r) => filters.every((f) => f(r)));
           if (limitVal !== null) rows = rows.slice(0, limitVal);
@@ -152,7 +153,7 @@ describe("GET /api/repos/[repoId]/stats", () => {
     expect(body.avg_review_duration_ms).toBe(2000); // (1000 + 2000 + 3000) / 3
 
     expect(body.severity_breakdown).toHaveLength(2);
-    const todaySeverity = body.severity_breakdown.find((s: any) => s.date === today);
+    const todaySeverity = body.severity_breakdown.find((s: { date: string }) => s.date === today);
     expect(todaySeverity).toEqual({
       date: today,
       critical: 2,
@@ -162,7 +163,7 @@ describe("GET /api/repos/[repoId]/stats", () => {
     });
 
     expect(body.risk_trend).toHaveLength(2);
-    const todayTrend = body.risk_trend.find((t: any) => t.date === today);
+    const todayTrend = body.risk_trend.find((t: { date: string }) => t.date === today);
     expect(todayTrend).toEqual({
       date: today,
       avg_risk_score: 80, // (70 + 90) / 2

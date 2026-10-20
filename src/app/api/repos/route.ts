@@ -3,7 +3,8 @@ import { createUserClient } from "@/lib/supabase/server";
 import { checkDashboardRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { DashboardRepo, ApiError } from "@/types";
 
-export async function GET(request: Request) {
+export async function GET(request?: Request) {
+  void request;
   try {
     const userClient = await createUserClient();
     const {
@@ -107,8 +108,8 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.json({ repos: dashboardRepos }, { status: 200 });
-  } catch (error: any) {
-    if (error?.digest === "HANGING_PROMISE_REJECTION") {
+  } catch (error: unknown) {
+    if ((error as { digest?: string } | null)?.digest === "HANGING_PROMISE_REJECTION") {
       throw error;
     }
     console.error("[GET_REPOS] Unexpected error:", error);

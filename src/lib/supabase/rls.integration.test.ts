@@ -5,7 +5,7 @@ import path from "node:path";
 
 function getSupabaseConfig() {
   const envPath = path.resolve(process.cwd(), ".env.local");
-  let fileEnv: Record<string, string> = {};
+  const fileEnv: Record<string, string> = {};
 
   if (fs.existsSync(envPath)) {
     const raw = fs.readFileSync(envPath, "utf8");

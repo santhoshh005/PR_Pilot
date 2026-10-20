@@ -138,6 +138,7 @@ describe("GitHub Review Poster — Unit & Sanitization", () => {
 });
 
 describe("postReviewToGitHub — Integration with Mocked Octokit", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Octokit REST client contains deep nested method trees for mock assertions
   let mockOctokit: any;
   const dummyRepoId = "repo-uuid-99";
   const dummyCommitSha = "sha123456789";
@@ -507,8 +508,7 @@ describe("postReviewToGitHub — Integration with Mocked Octokit", () => {
   });
 
   it("422 fallback: when GitHub rejects batch with 422, falls back to summary comment only", async () => {
-    const error422: any = new Error("Unprocessable Entity");
-    error422.status = 422;
+    const error422 = Object.assign(new Error("Unprocessable Entity"), { status: 422 });
 
     mockOctokit.rest.pulls.createReview
       .mockRejectedValueOnce(error422)

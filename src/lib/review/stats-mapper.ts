@@ -1,5 +1,16 @@
 import { SeverityBreakdown, RiskScoreTrend } from "@/types";
 
+export const DEFAULT_STATS_DAYS = 30;
+export const MAX_STATS_DAYS = 90;
+export const MAX_STATS_ROWS = 1000;
+
+/**
+ * Returns ISO string cutoff for stats lookback window.
+ */
+export function getStatsLookbackCutoff(days: number = DEFAULT_STATS_DAYS): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
 export interface ReviewStatsSource {
   id?: string;
   risk_score?: number | null;

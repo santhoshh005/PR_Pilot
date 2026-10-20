@@ -241,8 +241,8 @@ function parseHunks(lines: string[]): HunkInfo[] {
 function calculateHunkLines(
   newStart: number,
   newLines: number,
-  oldStart: number,
-  oldLines: number,
+  _oldStart: number,
+  _oldLines: number,
   rawLines: string[]
 ) {
   const lines = new Set<number>();
@@ -253,7 +253,6 @@ function calculateHunkLines(
   }
 
   let currentNew = newStart;
-  let currentOld = oldStart;
 
   for (const line of rawLines) {
     if (line.startsWith("+")) {
@@ -261,11 +260,10 @@ function calculateHunkLines(
       addedLines.add(currentNew);
       currentNew++;
     } else if (line.startsWith("-")) {
-      currentOld++;
+      // deleted line in old file
     } else if (line.startsWith(" ")) {
       lines.add(currentNew);
       currentNew++;
-      currentOld++;
     }
   }
 

@@ -5,18 +5,20 @@ import { checkDashboardRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import {
   ApiError,
   RepoStatsResponse,
-  SeverityBreakdown,
-  RiskScoreTrend,
 } from "@/types";
+import {
+  DEFAULT_STATS_DAYS,
+  MAX_STATS_DAYS,
+  MAX_STATS_ROWS,
+  mapReviewsToDailyStats,
+} from "@/lib/review/stats-mapper";
 
 const ParamsSchema = z.object({
   repoId: z.string().uuid("Invalid repository ID"),
 });
 
-const MAX_STATS_ROWS = 1000;
-
 const QuerySchema = z.object({
-  days: z.coerce.number().int().min(1).max(90).default(30),
+  days: z.coerce.number().int().min(1).max(MAX_STATS_DAYS).default(DEFAULT_STATS_DAYS),
 });
 
 export async function GET(
@@ -119,82 +121,13 @@ export async function GET(
     }
 
     const reviewList = reviews || [];
-    const totalReviews = reviewList.length;
-
-    let totalDuration = 0;
-    const dailyMap = new Map<
-      string,
-      {
-        critical: number;
-        warning: number;
-        suggestion: number;
-        praise: number;
-        riskScores: number[];
-      }
-    >();
-
-    for (const r of reviewList) {
-      totalDuration += r.review_duration_ms || 0;
-      const dateKey = (r.created_at || "").slice(0, 10);
-      if (!dateKey) continue;
-
-      const current = dailyMap.get(dateKey) || {
-        critical: 0,
-        warning: 0,
-        suggestion: 0,
-        praise: 0,
-        riskScores: [],
-      };
-
-      const counts = r.severity_counts || {};
-      current.critical += counts.critical || 0;
-      current.warning += counts.warning || 0;
-      current.suggestion += counts.suggestion || 0;
-      current.praise += counts.praise || 0;
-      current.riskScores.push(r.risk_score || 0);
-
-      dailyMap.set(dateKey, current);
-    }
-
-    const severityBreakdown: SeverityBreakdown[] = [];
-    const riskTrend: RiskScoreTrend[] = [];
-
-    // Sort dates chronologically
-    const sortedDates = Array.from(dailyMap.keys()).sort();
-
-    for (const d of sortedDates) {
-      const stats = dailyMap.get(d)!;
-      severityBreakdown.push({
-        date: d,
-        critical: stats.critical,
-        warning: stats.warning,
-        suggestion: stats.suggestion,
-        praise: stats.praise,
-      });
-
-      const avgRisk =
-        stats.riskScores.length > 0
-          ? Math.round(
-              stats.riskScores.reduce((sum, score) => sum + score, 0) /
-                stats.riskScores.length
-            )
-          : 0;
-
-      riskTrend.push({
-        date: d,
-        avg_risk_score: avgRisk,
-        review_count: stats.riskScores.length,
-      });
-    }
-
-    const avgReviewDurationMs =
-      totalReviews > 0 ? Math.round(totalDuration / totalReviews) : 0;
+    const statsResult = mapReviewsToDailyStats(reviewList, days);
 
     const response: RepoStatsResponse = {
-      severity_breakdown: severityBreakdown,
-      risk_trend: riskTrend,
-      total_reviews: totalReviews,
-      avg_review_duration_ms: avgReviewDurationMs,
+      severity_breakdown: statsResult.severityBreakdown,
+      risk_trend: statsResult.riskTrend,
+      total_reviews: statsResult.totalReviews,
+      avg_review_duration_ms: statsResult.avgReviewDurationMs,
     };
 
     return NextResponse.json(response, { status: 200 });

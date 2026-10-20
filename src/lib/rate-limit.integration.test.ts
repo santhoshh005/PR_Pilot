@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { checkRateLimit } from "./rate-limit";
+import { createServiceClient } from "./supabase/service";
 
 function getLiveConfig() {
   const envPath = path.resolve(process.cwd(), ".env.local");
@@ -65,17 +66,23 @@ describe("Live Supabase Rate Limiter Integration Test", () => {
     "atomically tracks limits, blocks on third attempt, and cleans up by exact ID",
     async () => {
       // 1st request: limit 2
-      const res1 = await checkRateLimit(testKey, 2, 60, { client: supabase! as any });
+      const res1 = await checkRateLimit(testKey, 2, 60, {
+        client: supabase! as unknown as ReturnType<typeof createServiceClient>,
+      });
       expect(res1.allowed).toBe(true);
       expect(res1.remaining).toBe(1);
 
       // 2nd request: limit 2
-      const res2 = await checkRateLimit(testKey, 2, 60, { client: supabase! as any });
+      const res2 = await checkRateLimit(testKey, 2, 60, {
+        client: supabase! as unknown as ReturnType<typeof createServiceClient>,
+      });
       expect(res2.allowed).toBe(true);
       expect(res2.remaining).toBe(0);
 
       // 3rd request: exceeds limit
-      const res3 = await checkRateLimit(testKey, 2, 60, { client: supabase! as any });
+      const res3 = await checkRateLimit(testKey, 2, 60, {
+        client: supabase! as unknown as ReturnType<typeof createServiceClient>,
+      });
       expect(res3.allowed).toBe(false);
       expect(res3.remaining).toBe(0);
       expect(res3.retryAfter).toBeGreaterThan(0);

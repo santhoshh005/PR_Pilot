@@ -6,7 +6,12 @@ import { Badge } from "@/components/ui/badge";
 import { ReviewList } from "@/components/dashboard/review-list";
 import { SeverityChart } from "@/components/dashboard/severity-chart";
 import { RiskTrendChart } from "@/components/dashboard/risk-trend-chart";
-import { mapReviewsToDailyStats } from "@/lib/review/stats-mapper";
+import {
+  DEFAULT_STATS_DAYS,
+  MAX_STATS_ROWS,
+  mapReviewsToDailyStats,
+  getStatsLookbackCutoff,
+} from "@/lib/review/stats-mapper";
 import { ReviewItem, ReviewCommentItem } from "@/components/dashboard/review-detail-modal";
 import { SeverityBreakdown, RiskScoreTrend } from "@/types";
 
@@ -85,21 +90,21 @@ export default async function RepoReviewsPage({
     }
 
     if (repo) {
-      // 2. Fetch stats for charts within 30 days lookback (bounded)
-      const statsCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      // 2. Fetch stats for charts within bounded lookback
+      const statsCutoff = getStatsLookbackCutoff(DEFAULT_STATS_DAYS);
       const { data: statsReviewsData, error: statsError } = await userClient
         .from("reviews")
         .select("id, risk_score, severity_counts, review_duration_ms, created_at")
         .eq("repo_id", repoId)
         .gte("created_at", statsCutoff)
         .order("created_at", { ascending: false })
-        .limit(1000);
+        .limit(MAX_STATS_ROWS);
 
       if (statsError) {
         console.error("[REPO_PAGE] Failed to fetch review stats:", statsError.message);
         statsHasError = true;
       } else if (statsReviewsData) {
-        const statsResult = mapReviewsToDailyStats(statsReviewsData, 30);
+        const statsResult = mapReviewsToDailyStats(statsReviewsData, DEFAULT_STATS_DAYS);
         severityData = statsResult.severityBreakdown;
         trendData = statsResult.riskTrend;
       }
@@ -158,11 +163,12 @@ export default async function RepoReviewsPage({
         }
       }
     }
-  } catch (err: any) {
-    if (err?.message === "NEXT_NOT_FOUND") {
+  } catch (err: unknown) {
+    const errorObj = err as { message?: string } | null;
+    if (errorObj?.message === "NEXT_NOT_FOUND") {
       throw err;
     }
-    console.error("[REPO_PAGE] Unexpected error:", err?.message || err);
+    console.error("[REPO_PAGE] Unexpected error:", errorObj?.message || err);
     hasError = true;
   }
 

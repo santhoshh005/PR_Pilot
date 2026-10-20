@@ -79,7 +79,8 @@ describe("WebhookPullRequestSchema", () => {
   });
 
   it("rejects payload missing repository information", () => {
-    const { repository, ...withoutRepo } = validPayload;
+    const withoutRepo = { ...validPayload };
+    delete (withoutRepo as { repository?: unknown }).repository;
     expect(WebhookPullRequestSchema.safeParse(withoutRepo).success).toBe(false);
   });
 
@@ -95,7 +96,8 @@ describe("WebhookPullRequestSchema", () => {
   });
 
   it("accepts payload without optional installation", () => {
-    const { installation, ...withoutInstallation } = validPayload;
+    const withoutInstallation = { ...validPayload };
+    delete (withoutInstallation as { installation?: unknown }).installation;
     const result = WebhookPullRequestSchema.safeParse(withoutInstallation);
     expect(result.success).toBe(true);
   });

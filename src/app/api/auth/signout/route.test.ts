@@ -22,7 +22,7 @@ describe("Sign Out Route Handler (/api/auth/signout)", () => {
     const route = await import("./route");
     expect(route.POST).toBeDefined();
     expect(typeof route.POST).toBe("function");
-    expect((route as any).GET).toBeUndefined();
+    expect((route as Record<string, unknown>).GET).toBeUndefined();
   });
 
   it("calls signOut on the user client and redirects safely to / with 303", async () => {

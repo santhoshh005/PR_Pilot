@@ -84,7 +84,7 @@ describe("SettingsForm", () => {
   });
 
   it("successfully saves settings and shows success feedback", async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    (global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
@@ -119,7 +119,7 @@ describe("SettingsForm", () => {
   });
 
   it("submits relaxed strictness successfully", async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    (global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
@@ -154,7 +154,7 @@ describe("SettingsForm", () => {
   });
 
   it("handles 429 rate-limited response cleanly without raw API text", async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    (global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: false,
       status: 429,
       headers: new Headers({ "Retry-After": "30" }),
@@ -175,7 +175,7 @@ describe("SettingsForm", () => {
   });
 
   it("handles generic 500 server error cleanly without raw DB errors", async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    (global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: false,
       status: 500,
       json: async () => ({

@@ -9,6 +9,21 @@ export const instant = false;
 
 const MAX_DASHBOARD_REVIEWS = 1000;
 
+interface RepoRow {
+  id: string;
+  full_name: string;
+  owner: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+interface ReviewRow {
+  repo_id: string;
+  risk_score: number | null;
+  created_at: string;
+}
+
 export default async function DashboardPage() {
   const userClient = await createUserClient();
   const {
@@ -19,8 +34,8 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  let repos: any[] | null = null;
-  let reviews: any[] | null = null;
+  let repos: RepoRow[] | null = null;
+  let reviews: ReviewRow[] | null = null;
   let hasError = false;
 
   try {
@@ -51,8 +66,8 @@ export default async function DashboardPage() {
         reviews = reviewsData;
       }
     }
-  } catch (err: any) {
-    console.error("[DASHBOARD_PAGE] Unexpected error:", err?.message || err);
+  } catch (err: unknown) {
+    console.error("[DASHBOARD_PAGE] Unexpected error:", (err as { message?: string } | null)?.message || err);
     hasError = true;
   }
 
@@ -109,7 +124,7 @@ export default async function DashboardPage() {
   }
 
   // Aggregate review stats per repo
-  const reviewsByRepo = new Map<string, Array<{ risk_score: number; created_at: string }>>();
+  const reviewsByRepo = new Map<string, Array<{ risk_score: number | null; created_at: string }>>();
   for (const rev of reviews || []) {
     const list = reviewsByRepo.get(rev.repo_id) || [];
     list.push(rev);
@@ -124,7 +139,7 @@ export default async function DashboardPage() {
     let lastReviewAt: string | null = null;
 
     if (totalReviews > 0) {
-      const totalScore = repoReviews.reduce((sum, r) => sum + r.risk_score, 0);
+      const totalScore = repoReviews.reduce((sum, r) => sum + (r.risk_score || 0), 0);
       avgRiskScore = Math.round(totalScore / totalReviews);
 
       let latestTime = 0;

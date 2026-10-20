@@ -1,5 +1,5 @@
 import * as React from "react";
-import Link from "next/link";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 
 export interface HeaderProps {
@@ -83,9 +83,12 @@ export function Header({ user, onMenuToggle }: HeaderProps) {
 
         <div className="flex items-center gap-2 pl-2 border-l border-zinc-200 dark:border-zinc-800">
           {avatarUrl ? (
-            <img
+            <Image
               src={avatarUrl}
               alt={username}
+              width={32}
+              height={32}
+              unoptimized
               className="h-8 w-8 rounded-full border border-zinc-200 dark:border-zinc-700 object-cover"
             />
           ) : (

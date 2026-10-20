@@ -1,21 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { processReview, combineSmallChunks, collectValidLines } from "./processor";
 import { validateAndFilterComments } from "./poster";
-import { CONFIG } from "@/types";
+import { DiffChunk } from "@/types";
 import * as diffParser from "@/lib/github/diff-parser";
 import * as geminiReview from "@/lib/gemini/review";
 import * as githubApp from "@/lib/github/app";
 
 // In-memory Supabase mock state
 let mockDb: {
-  review_jobs: any[];
-  review_chunks: any[];
-  reviews: any[];
-  review_comments: any[];
-  repos: any[];
-  installations: any[];
-  repo_settings: any[];
-  daily_api_usage: any[];
+  review_jobs: Record<string, unknown>[];
+  review_chunks: Record<string, unknown>[];
+  reviews: Record<string, unknown>[];
+  review_comments: Record<string, unknown>[];
+  repos: Record<string, unknown>[];
+  installations: Record<string, unknown>[];
+  repo_settings: Record<string, unknown>[];
+  daily_api_usage: Record<string, unknown>[];
 };
 
 function resetMockDb() {
@@ -35,54 +35,53 @@ function resetMockDb() {
 function createMockSupabaseClient() {
   return {
     from: (table: string) => {
-      let currentTable = mockDb[table as keyof typeof mockDb] || [];
-      let filters: Array<(row: any) => boolean> = [];
-      let pendingInsert: any = null;
-      let pendingUpdate: any = null;
-      let pendingUpsert: any = null;
+      const currentTable = (mockDb[table as keyof typeof mockDb] || []) as Record<string, unknown>[];
+      const filters: Array<(row: Record<string, unknown>) => boolean> = [];
+      let pendingInsert: Record<string, unknown>[] | null = null;
+      let pendingUpdate: Record<string, unknown> | null = null;
+      let pendingUpsert: Record<string, unknown>[] | null = null;
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase query builder mock chaining interface
       const chain: any = {
-        select: (columns = "*", options?: { count?: string; head?: boolean }) => {
-          return chain;
-        },
-        eq: (field: string, value: any) => {
+        select: () => chain,
+        eq: (field: string, value: unknown) => {
           filters.push((row) => row[field] === value);
           return chain;
         },
-        neq: (field: string, value: any) => {
+        neq: (field: string, value: unknown) => {
           filters.push((row) => row[field] !== value);
           return chain;
         },
-        insert: (rows: any) => {
+        insert: (rows: Record<string, unknown> | Record<string, unknown>[]) => {
           pendingInsert = Array.isArray(rows) ? rows : [rows];
           return chain;
         },
-        update: (values: any) => {
+        update: (values: Record<string, unknown>) => {
           pendingUpdate = values;
           return chain;
         },
-        upsert: (values: any) => {
+        upsert: (values: Record<string, unknown> | Record<string, unknown>[]) => {
           pendingUpsert = Array.isArray(values) ? values : [values];
           return chain;
         },
         delete: () => {
-          const toDelete = currentTable.filter((row: any) =>
+          const toDelete = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           mockDb[table as keyof typeof mockDb] = currentTable.filter(
-            (row: any) => !toDelete.includes(row)
+            (row) => !toDelete.includes(row)
           );
           return Promise.resolve({ data: toDelete, error: null });
         },
         maybeSingle: async () => {
-          let rows = currentTable.filter((row: any) =>
+          const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           return { data: rows[0] || null, error: null };
         },
         single: async () => {
           if (pendingInsert) {
-            const insertedWithIds = pendingInsert.map((r: any) => ({
+            const insertedWithIds = pendingInsert.map((r) => ({
               id: r.id || `uuid-${Math.random().toString(36).substring(2, 9)}`,
               created_at: new Date().toISOString(),
               ...r,
@@ -90,15 +89,15 @@ function createMockSupabaseClient() {
             currentTable.push(...insertedWithIds);
             return { data: insertedWithIds[0], error: null };
           }
-          let rows = currentTable.filter((row: any) =>
+          const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           if (rows.length === 0) return { data: null, error: new Error("Not found") };
           return { data: rows[0], error: null };
         },
-        then: (resolve: any) => {
+        then: (resolve: (val: unknown) => void) => {
           if (pendingInsert) {
-            const inserted = pendingInsert.map((r: any) => ({
+            const inserted = pendingInsert.map((r) => ({
               id: r.id || `uuid-${Math.random().toString(36).substring(2, 9)}`,
               created_at: new Date().toISOString(),
               ...r,
@@ -109,7 +108,7 @@ function createMockSupabaseClient() {
           if (pendingUpsert) {
             for (const item of pendingUpsert) {
               const existingIdx = currentTable.findIndex(
-                (r: any) => r.usage_date === item.usage_date
+                (r) => r.usage_date === item.usage_date
               );
               if (existingIdx !== -1) {
                 currentTable[existingIdx] = { ...currentTable[existingIdx], ...item };
@@ -120,16 +119,14 @@ function createMockSupabaseClient() {
             return resolve({ data: pendingUpsert, error: null });
           }
           if (pendingUpdate) {
-            let updatedCount = 0;
-            currentTable.forEach((row: any) => {
+            currentTable.forEach((row) => {
               if (filters.every((f) => f(row))) {
                 Object.assign(row, pendingUpdate);
-                updatedCount++;
               }
             });
             return resolve({ data: null, error: null });
           }
-          let rows = currentTable.filter((row: any) =>
+          const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
           );
           return resolve({ data: rows, error: null });
@@ -137,7 +134,7 @@ function createMockSupabaseClient() {
       };
       return chain;
     },
-    rpc: async (fn: string, params?: any) => {
+    rpc: async (fn: string): Promise<{ data: unknown; error: unknown }> => {
       if (fn === "increment_daily_api_usage") {
         const today = new Date().toISOString().slice(0, 10);
         let row = mockDb.daily_api_usage.find((r) => r.usage_date === today);
@@ -145,7 +142,7 @@ function createMockSupabaseClient() {
           row = { usage_date: today, call_count: 1, updated_at: new Date().toISOString() };
           mockDb.daily_api_usage.push(row);
         } else {
-          row.call_count += 1;
+          row.call_count = Number(row.call_count || 0) + 1;
         }
         return { data: row.call_count, error: null };
       }
@@ -216,7 +213,7 @@ describe("Review Processor / Orchestrator", () => {
     vi.spyOn(githubApp, "getInstallationOctokit").mockReturnValue({
       rest: {
         pulls: {
-          get: vi.fn().mockImplementation((params: any) => {
+          get: vi.fn().mockImplementation((params: { mediaType?: { format?: string } }) => {
             if (params?.mediaType?.format === "diff") {
               return Promise.resolve({ data: "diff --git a/file.ts b/file.ts\n+line" });
             }
@@ -227,7 +224,7 @@ describe("Review Processor / Orchestrator", () => {
           updateReview: vi.fn().mockResolvedValue({ data: { id: 778899 } }),
         },
       },
-    } as any);
+    } as unknown as ReturnType<typeof githubApp.getInstallationOctokit>);
 
     vi.spyOn(diffParser, "fetchDiff").mockResolvedValue(
       "diff --git a/file.ts b/file.ts\n+line"
@@ -241,7 +238,7 @@ describe("Review Processor / Orchestrator", () => {
         token_estimate: 20,
         hunk_line_numbers: new Set([2]),
       },
-    ] as any);
+    ] as unknown as DiffChunk[]);
   });
 
   it("happy path: all chunks succeed -> job completed, reviews and comments saved", async () => {
@@ -279,7 +276,7 @@ describe("Review Processor / Orchestrator", () => {
     vi.spyOn(githubApp, "getInstallationOctokit").mockReturnValue({
       rest: {
         pulls: {
-          get: vi.fn().mockImplementation((params: any) => {
+          get: vi.fn().mockImplementation((params: { mediaType?: { format?: string } }) => {
             if (params?.mediaType?.format === "diff") {
               return Promise.resolve({ data: "diff --git a/file.ts b/file.ts\n+line" });
             }
@@ -289,7 +286,7 @@ describe("Review Processor / Orchestrator", () => {
           createReview: vi.fn().mockResolvedValue({ data: { id: 778899 } }),
         },
       },
-    } as any);
+    } as unknown as ReturnType<typeof githubApp.getInstallationOctokit>);
 
     vi.spyOn(geminiReview, "reviewChunk").mockResolvedValue({
       chunk_summary: "Safe code additions.",
@@ -308,7 +305,7 @@ describe("Review Processor / Orchestrator", () => {
     vi.spyOn(diffParser, "parseDiff").mockReturnValue([
       { index: 0, file_path: "good.ts", content: "+good", token_estimate: 4000 },
       { index: 1, file_path: "bad.ts", content: "+bad", token_estimate: 4000 },
-    ] as any);
+    ] as unknown as DiffChunk[]);
 
     vi.spyOn(geminiReview, "reviewChunk")
       .mockResolvedValueOnce({
@@ -338,7 +335,7 @@ describe("Review Processor / Orchestrator", () => {
       vi.spyOn(diffParser, "parseDiff").mockReturnValue([
         { index: 0, file_path: "finished.ts", content: "+ok", token_estimate: 4000 },
         { index: 1, file_path: "skipped.ts", content: "+skip", token_estimate: 4000 },
-      ] as any);
+      ] as unknown as DiffChunk[]);
 
       vi.spyOn(geminiReview, "reviewChunk").mockImplementation(async () => {
         // Fast-forward time past deadline after chunk 0 is reviewed
@@ -394,6 +391,7 @@ describe("Review Processor / Orchestrator", () => {
 
     await processReview(dummyJobId);
 
+    expect(attempts).toBeGreaterThan(0);
     const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
     expect(job?.status).toBe("completed");
     expect(mockDb.review_chunks[0].status).toBe("completed");
@@ -494,7 +492,7 @@ describe("Review Processor / Orchestrator", () => {
     vi.spyOn(diffParser, "parseDiff").mockReturnValue([
       { index: 0, file_path: "a.ts", content: "+codeA", token_estimate: 4000 },
       { index: 1, file_path: "b.ts", content: "+codeB", token_estimate: 4000 },
-    ] as any);
+    ] as unknown as DiffChunk[]);
 
     vi.spyOn(geminiReview, "reviewChunk")
       .mockResolvedValueOnce({
@@ -581,7 +579,10 @@ describe("Review Processor / Orchestrator", () => {
         hunk_line_numbers: new Set([11]),
       };
 
-      const combined = combineSmallChunks([chunk1 as any, chunk2 as any]);
+      const combined = combineSmallChunks([
+        chunk1 as unknown as DiffChunk,
+        chunk2 as unknown as DiffChunk,
+      ]);
 
       expect(combined.length).toBe(1);
       const singleCombined = combined[0];
@@ -654,7 +655,13 @@ describe("Review Processor / Orchestrator", () => {
     it("fails chunk immediately without calling Gemini when increment_daily_api_usage RPC fails", async () => {
       vi.spyOn(mockSupabase, "rpc").mockResolvedValueOnce({
         data: null,
-        error: new Error("RPC increment failure") as any,
+        error: Object.assign(new Error("RPC increment failure"), {
+          name: "PostgrestError",
+          message: "RPC increment failure",
+          details: "",
+          hint: "",
+          code: "500",
+        }),
       });
       const reviewChunkSpy = vi.spyOn(geminiReview, "reviewChunk");
 

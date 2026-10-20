@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 let mockUser: { id: string } | null = null;
-let mockRepoData: any = null;
-let mockSettingsData: any = null;
+let mockRepoData: Record<string, unknown> | null = null;
+let mockSettingsData: Record<string, unknown> | null = null;
 let mockDbError: Error | null = null;
 const mockRedirect = vi.fn();
 const mockNotFound = vi.fn();

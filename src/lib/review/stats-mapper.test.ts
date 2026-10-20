@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { mapReviewsToDailyStats } from "./stats-mapper";
+import {
+  mapReviewsToDailyStats,
+  ReviewStatsSource,
+  DEFAULT_STATS_DAYS,
+  MAX_STATS_DAYS,
+  MAX_STATS_ROWS,
+} from "./stats-mapper";
 
 describe("mapReviewsToDailyStats", () => {
   it("handles empty reviews array returning empty severity and risk data", () => {
@@ -80,7 +86,7 @@ describe("mapReviewsToDailyStats", () => {
       },
     ];
 
-    const result = mapReviewsToDailyStats(reviews as any, 30);
+    const result = mapReviewsToDailyStats(reviews as ReviewStatsSource[], 30);
 
     expect(result.totalReviews).toBe(1);
     expect(result.avgReviewDurationMs).toBe(0);
@@ -111,5 +117,48 @@ describe("mapReviewsToDailyStats", () => {
 
     const result = mapReviewsToDailyStats(reviews, 30);
     expect(result.severityBreakdown[0].date).not.toContain("<script>");
+  });
+
+  it("exports shared constants matching route limits and aligns bucket boundaries across consumers", () => {
+    expect(DEFAULT_STATS_DAYS).toBe(30);
+    expect(MAX_STATS_DAYS).toBe(90);
+    expect(MAX_STATS_ROWS).toBe(1000);
+
+    const fixture: ReviewStatsSource[] = [
+      {
+        id: "rev-fixture-1",
+        risk_score: 80,
+        severity_counts: { critical: 1, warning: 1, suggestion: 0, praise: 0 },
+        review_duration_ms: 1200,
+        created_at: "2026-10-18T10:00:00Z",
+      },
+      {
+        id: "rev-fixture-2",
+        risk_score: 40,
+        severity_counts: { critical: 0, warning: 2, suggestion: 1, praise: 1 },
+        review_duration_ms: 1800,
+        created_at: "2026-10-18T18:00:00Z",
+      },
+    ];
+
+    const mapped = mapReviewsToDailyStats(fixture, DEFAULT_STATS_DAYS);
+
+    // Verified: single UTC bucket for 2026-10-18
+    expect(mapped.severityBreakdown).toHaveLength(1);
+    expect(mapped.severityBreakdown[0]).toEqual({
+      date: "2026-10-18",
+      critical: 1,
+      warning: 3,
+      suggestion: 1,
+      praise: 1,
+    });
+    expect(mapped.riskTrend).toHaveLength(1);
+    expect(mapped.riskTrend[0]).toEqual({
+      date: "2026-10-18",
+      avg_risk_score: 60,
+      review_count: 2,
+    });
+    expect(mapped.totalReviews).toBe(2);
+    expect(mapped.avgReviewDurationMs).toBe(1500);
   });
 });

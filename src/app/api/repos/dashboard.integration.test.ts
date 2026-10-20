@@ -10,7 +10,7 @@ import { GET as getSettings, PATCH as patchSettings } from "./[repoId]/settings/
 
 function getSupabaseConfig() {
   const envPath = path.resolve(process.cwd(), ".env.local");
-  let fileEnv: Record<string, string> = {};
+  const fileEnv: Record<string, string> = {};
 
   if (fs.existsSync(envPath)) {
     const raw = fs.readFileSync(envPath, "utf8");
@@ -311,7 +311,7 @@ runOrSkip("Live Dashboard API Endpoints Integration Test (Cross-User Isolation)"
     const resRepos = await getRepos(reqRepos);
     expect(resRepos.status).toBe(200);
     const bodyRepos = await resRepos.json();
-    expect(bodyRepos.repos.some((r: any) => r.id === testRepoAId)).toBe(true);
+    expect(bodyRepos.repos.some((r: { id: string }) => r.id === testRepoAId)).toBe(true);
 
     // 2. GET /api/repos/[repoId]/reviews
     const reqReviews = new Request(

@@ -89,11 +89,12 @@ export default async function RepoSettingsPage({ params }: SettingsPageProps) {
         };
       }
     }
-  } catch (err: any) {
-    if (err?.message === "NEXT_NOT_FOUND") {
+  } catch (err: unknown) {
+    const errorObj = err as { message?: string } | null;
+    if (errorObj?.message === "NEXT_NOT_FOUND") {
       throw err;
     }
-    console.error("[SETTINGS_PAGE] Unexpected error:", err?.message || err);
+    console.error("[SETTINGS_PAGE] Unexpected error:", errorObj?.message || err);
     hasError = true;
   }
 

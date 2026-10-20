@@ -123,8 +123,8 @@ export async function checkRateLimit(
       resetAt: new Date(row.reset_at),
       retryAfter: Math.max(0, Number(row.retry_after)),
     };
-  } catch (err: any) {
-    console.warn("[RATE_LIMIT] Unexpected error during rate check:", err?.message || err);
+  } catch (err: unknown) {
+    console.warn("[RATE_LIMIT] Unexpected error during rate check:", (err as { message?: string } | null)?.message || err);
     if (failOpen) {
       return {
         allowed: true,

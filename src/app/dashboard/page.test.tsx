@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 let mockUser: { id: string } | null = null;
-let mockReposData: any[] = [];
-let mockReviewsData: any[] = [];
+let mockReposData: Record<string, unknown>[] = [];
+let mockReviewsData: Record<string, unknown>[] = [];
 let mockDbError: Error | null = null;
 const mockRedirect = vi.fn();
 const mockLimitFn = vi.fn();
@@ -24,7 +24,7 @@ vi.mock("@/lib/supabase/server", () => ({
     },
     from: vi.fn((table: string) => ({
       select: vi.fn(() => ({
-        order: vi.fn((col: string, opts?: any) => {
+        order: vi.fn((col: string, opts?: Record<string, unknown>) => {
           mockOrderFn(table, col, opts);
           return {
             limit: vi.fn(async (limitVal: number) => {
@@ -32,14 +32,14 @@ vi.mock("@/lib/supabase/server", () => ({
               if (mockDbError) return { data: null, error: mockDbError };
               return { data: table === "repos" ? mockReposData : mockReviewsData, error: null };
             }),
-            then: (resolve: any) => {
+            then: (resolve: (val: unknown) => void) => {
               if (mockDbError) return resolve({ data: null, error: mockDbError });
               return resolve({ data: mockReposData, error: null });
             },
           };
         }),
-        in: vi.fn((col: string, values: any[]) => ({
-          order: vi.fn((col: string, opts?: any) => {
+        in: vi.fn(() => ({
+          order: vi.fn((col: string, opts?: Record<string, unknown>) => {
             mockOrderFn(table, col, opts);
             return {
               limit: vi.fn(async (limitVal: number) => {
@@ -50,7 +50,7 @@ vi.mock("@/lib/supabase/server", () => ({
             };
           }),
         })),
-        then: (resolve: any) => {
+        then: (resolve: (val: unknown) => void) => {
           if (mockDbError) return resolve({ data: null, error: mockDbError });
           if (table === "repos") return resolve({ data: mockReposData, error: null });
           if (table === "reviews") return resolve({ data: mockReviewsData, error: null });
