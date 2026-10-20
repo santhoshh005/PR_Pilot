@@ -110,7 +110,10 @@ export default async function ReviewDetailPage({ params }: ReviewPageProps) {
       }
     }
   } catch (err: unknown) {
-    if ((err as { message?: string } | null)?.message === "NEXT_NOT_FOUND") {
+    const errorObj = err as { message?: string; digest?: string } | null;
+    const msg = errorObj?.message || "";
+    const digest = errorObj?.digest || "";
+    if (msg.startsWith("NEXT_") || digest.startsWith("NEXT_")) {
       throw err;
     }
     console.error("[REVIEW_DETAIL_PAGE] Unexpected error:", err);

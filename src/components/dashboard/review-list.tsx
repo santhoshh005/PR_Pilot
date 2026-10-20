@@ -57,10 +57,11 @@ export function ReviewList({
               ? "warning"
               : "destructive";
 
-          const formattedDate = new Date(review.created_at).toLocaleDateString(undefined, {
+          const formattedDate = new Date(review.created_at).toLocaleDateString("en-US", {
             year: "numeric",
             month: "short",
             day: "numeric",
+            timeZone: "UTC",
           });
 
           return (

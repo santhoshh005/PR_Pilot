@@ -90,8 +90,10 @@ export default async function RepoSettingsPage({ params }: SettingsPageProps) {
       }
     }
   } catch (err: unknown) {
-    const errorObj = err as { message?: string } | null;
-    if (errorObj?.message === "NEXT_NOT_FOUND") {
+    const errorObj = err as { message?: string; digest?: string } | null;
+    const msg = errorObj?.message || "";
+    const digest = errorObj?.digest || "";
+    if (msg.startsWith("NEXT_") || digest.startsWith("NEXT_")) {
       throw err;
     }
     console.error("[SETTINGS_PAGE] Unexpected error:", errorObj?.message || err);
