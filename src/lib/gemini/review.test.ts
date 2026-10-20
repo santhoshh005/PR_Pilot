@@ -260,10 +260,98 @@ describe("reviewChunk - with mocked Gemini API", () => {
     expect(result.severity_counts.critical).toBe(1);
     expect(mockGenerateContent).toHaveBeenCalledTimes(1);
   });
+
+  it("handles HTTP 503 (UNAVAILABLE) like 429 with backoff and succeeds on retry", async () => {
+    const unavailableError = new Error("503 Service Unavailable: High server load");
+    const mockGenerateContent = vi
+      .fn()
+      .mockRejectedValueOnce(unavailableError)
+      .mockResolvedValueOnce({
+        text: JSON.stringify(sampleReviewJson),
+      });
+
+    const mockClient = {
+      models: {
+        generateContent: mockGenerateContent,
+      },
+    } as unknown as GoogleGenAI;
+
+    const result = await reviewChunk(
+      dummyChunk,
+      {
+        ...dummyContext,
+        client: mockClient,
+      },
+      { baseDelayMs: 10 }
+    );
+
+    expect(result).toEqual(sampleReviewJson);
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws UnavailableError when HTTP 503 persists beyond max retries", async () => {
+    const unavailableError = new Error("503 UNAVAILABLE");
+    const mockGenerateContent = vi.fn().mockRejectedValue(unavailableError);
+
+    const mockClient = {
+      models: {
+        generateContent: mockGenerateContent,
+      },
+    } as unknown as GoogleGenAI;
+
+    await expect(
+      reviewChunk(
+        dummyChunk,
+        {
+          ...dummyContext,
+          client: mockClient,
+        },
+        { baseDelayMs: 5, maxRateLimitRetries: 2 }
+      )
+    ).rejects.toThrow("Gemini service unavailable after");
+  });
+
+  it("reads model name from GEMINI_MODEL env var and includes thinkingLevel LOW", async () => {
+    const prevModel = process.env.GEMINI_MODEL;
+    process.env.GEMINI_MODEL = "gemini-3.5-flash-lite";
+
+    try {
+      const mockGenerateContent = vi.fn().mockResolvedValue({
+        text: JSON.stringify(sampleReviewJson),
+      });
+
+      const mockClient = {
+        models: {
+          generateContent: mockGenerateContent,
+        },
+      } as unknown as GoogleGenAI;
+
+      await reviewChunk(dummyChunk, {
+        ...dummyContext,
+        client: mockClient,
+      });
+
+      const callArgs = mockGenerateContent.mock.calls[0][0];
+      expect(callArgs.model).toBe("gemini-3.5-flash-lite");
+      expect(callArgs.config.thinkingConfig.thinkingLevel).toBe("LOW");
+    } finally {
+      if (prevModel === undefined) {
+        delete process.env.GEMINI_MODEL;
+      } else {
+        process.env.GEMINI_MODEL = prevModel;
+      }
+    }
+  });
 });
 
 describe("Gemini Live Smoke Test", () => {
-  it("makes a single real API call when GEMINI_API_KEY is available (or skips if absent)", async (ctx) => {
+  it("makes a single real API call when GEMINI_API_KEY is available and RUN_LIVE_TESTS=1 (or skips)", async (ctx) => {
+    if (process.env.RUN_LIVE_TESTS !== "1") {
+      console.info("[SMOKE TEST] Skipping live Gemini API smoke test: RUN_LIVE_TESTS is not set to 1.");
+      ctx.skip();
+      return;
+    }
+
     let apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       const envPath = path.resolve(process.cwd(), ".env.local");

@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import {
   ChunkReviewResult,
   ChunkReviewResultSchema,
@@ -7,6 +7,13 @@ import {
   CONFIG,
 } from "@/types";
 import { createGeminiClient } from "./client";
+
+export class UnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnavailableError";
+  }
+}
 
 export interface ReviewContext {
   repo_full_name: string;
@@ -160,9 +167,18 @@ export async function reviewChunk(
   );
 }
 
+function getThinkingLevel(): ThinkingLevel {
+  const envLevel = process.env.GEMINI_THINKING_LEVEL?.toUpperCase();
+  if (envLevel === "MINIMAL") return ThinkingLevel.MINIMAL;
+  if (envLevel === "MEDIUM") return ThinkingLevel.MEDIUM;
+  if (envLevel === "HIGH") return ThinkingLevel.HIGH;
+  return ThinkingLevel.LOW;
+}
+
 async function callGemini(client: GoogleGenAI, prompt: string): Promise<string> {
+  const model = process.env.GEMINI_MODEL || CONFIG.GEMINI_MODEL;
   const response = await client.models.generateContent({
-    model: CONFIG.GEMINI_MODEL,
+    model,
     contents: prompt,
     config: {
       systemInstruction: SYSTEM_PROMPT,
@@ -170,6 +186,9 @@ async function callGemini(client: GoogleGenAI, prompt: string): Promise<string> 
       responseJsonSchema: CHUNK_REVIEW_RESPONSE_SCHEMA,
       temperature: 0.2,
       maxOutputTokens: 4096,
+      thinkingConfig: {
+        thinkingLevel: getThinkingLevel(),
+      },
     },
   });
 
@@ -202,24 +221,38 @@ async function executeWithRateLimitRetry<T>(
       return await fn();
     } catch (err: unknown) {
       attempt++;
-      if (attempt > maxRetries || !isRateLimitError(err)) {
+      if (attempt > maxRetries || !isRetryableError(err)) {
+        if (isUnavailableError(err)) {
+          const msg = err instanceof Error ? err.message : "Service Unavailable";
+          throw new UnavailableError(`Gemini service unavailable after ${attempt} attempts: ${msg}`);
+        }
         throw err;
       }
 
-      const delay = baseDelay * Math.pow(2, attempt - 1);
+      const jitter = Math.random() * 100;
+      const delay = baseDelay * Math.pow(2, attempt - 1) + jitter;
       await sleep(delay);
     }
   }
 }
 
-function isRateLimitError(err: unknown): boolean {
+export function isRetryableError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const message = err.message.toLowerCase();
   return (
     message.includes("429") ||
     message.includes("resource_exhausted") ||
-    message.includes("rate limit")
+    message.includes("rate limit") ||
+    message.includes("503") ||
+    message.includes("unavailable")
   );
+}
+
+export function isUnavailableError(err: unknown): boolean {
+  if (err instanceof UnavailableError) return true;
+  if (!(err instanceof Error)) return false;
+  const message = err.message.toLowerCase();
+  return message.includes("503") || message.includes("unavailable");
 }
 
 function sleep(ms: number): Promise<void> {

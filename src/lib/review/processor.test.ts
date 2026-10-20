@@ -1,0 +1,514 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { processReview } from "./processor";
+import { CONFIG } from "@/types";
+import * as diffParser from "@/lib/github/diff-parser";
+import * as geminiReview from "@/lib/gemini/review";
+import * as githubApp from "@/lib/github/app";
+
+// In-memory Supabase mock state
+let mockDb: {
+  review_jobs: any[];
+  review_chunks: any[];
+  reviews: any[];
+  review_comments: any[];
+  repos: any[];
+  installations: any[];
+  repo_settings: any[];
+  daily_api_usage: any[];
+};
+
+function resetMockDb() {
+  mockDb = {
+    review_jobs: [],
+    review_chunks: [],
+    reviews: [],
+    review_comments: [],
+    repos: [],
+    installations: [],
+    repo_settings: [],
+    daily_api_usage: [],
+  };
+}
+
+// Create chainable Supabase mock
+function createMockSupabaseClient() {
+  return {
+    from: (table: string) => {
+      let currentTable = mockDb[table as keyof typeof mockDb] || [];
+      let filters: Array<(row: any) => boolean> = [];
+      let pendingInsert: any = null;
+      let pendingUpdate: any = null;
+      let pendingUpsert: any = null;
+
+      const chain: any = {
+        select: (columns = "*", options?: { count?: string; head?: boolean }) => {
+          return chain;
+        },
+        eq: (field: string, value: any) => {
+          filters.push((row) => row[field] === value);
+          return chain;
+        },
+        neq: (field: string, value: any) => {
+          filters.push((row) => row[field] !== value);
+          return chain;
+        },
+        insert: (rows: any) => {
+          pendingInsert = Array.isArray(rows) ? rows : [rows];
+          return chain;
+        },
+        update: (values: any) => {
+          pendingUpdate = values;
+          return chain;
+        },
+        upsert: (values: any) => {
+          pendingUpsert = Array.isArray(values) ? values : [values];
+          return chain;
+        },
+        delete: () => {
+          const toDelete = currentTable.filter((row: any) =>
+            filters.every((f) => f(row))
+          );
+          mockDb[table as keyof typeof mockDb] = currentTable.filter(
+            (row: any) => !toDelete.includes(row)
+          );
+          return Promise.resolve({ data: toDelete, error: null });
+        },
+        maybeSingle: async () => {
+          let rows = currentTable.filter((row: any) =>
+            filters.every((f) => f(row))
+          );
+          return { data: rows[0] || null, error: null };
+        },
+        single: async () => {
+          if (pendingInsert) {
+            const insertedWithIds = pendingInsert.map((r: any) => ({
+              id: r.id || `uuid-${Math.random().toString(36).substring(2, 9)}`,
+              created_at: new Date().toISOString(),
+              ...r,
+            }));
+            currentTable.push(...insertedWithIds);
+            return { data: insertedWithIds[0], error: null };
+          }
+          let rows = currentTable.filter((row: any) =>
+            filters.every((f) => f(row))
+          );
+          if (rows.length === 0) return { data: null, error: new Error("Not found") };
+          return { data: rows[0], error: null };
+        },
+        then: (resolve: any) => {
+          if (pendingInsert) {
+            const inserted = pendingInsert.map((r: any) => ({
+              id: r.id || `uuid-${Math.random().toString(36).substring(2, 9)}`,
+              created_at: new Date().toISOString(),
+              ...r,
+            }));
+            currentTable.push(...inserted);
+            return resolve({ data: inserted, error: null });
+          }
+          if (pendingUpsert) {
+            for (const item of pendingUpsert) {
+              const existingIdx = currentTable.findIndex(
+                (r: any) => r.usage_date === item.usage_date
+              );
+              if (existingIdx !== -1) {
+                currentTable[existingIdx] = { ...currentTable[existingIdx], ...item };
+              } else {
+                currentTable.push(item);
+              }
+            }
+            return resolve({ data: pendingUpsert, error: null });
+          }
+          if (pendingUpdate) {
+            let updatedCount = 0;
+            currentTable.forEach((row: any) => {
+              if (filters.every((f) => f(row))) {
+                Object.assign(row, pendingUpdate);
+                updatedCount++;
+              }
+            });
+            return resolve({ data: null, error: null });
+          }
+          let rows = currentTable.filter((row: any) =>
+            filters.every((f) => f(row))
+          );
+          return resolve({ data: rows, error: null });
+        },
+      };
+      return chain;
+    },
+    rpc: async (fn: string, params?: any) => {
+      if (fn === "increment_daily_api_usage") {
+        const today = new Date().toISOString().slice(0, 10);
+        let row = mockDb.daily_api_usage.find((r) => r.usage_date === today);
+        if (!row) {
+          row = { usage_date: today, call_count: 1, updated_at: new Date().toISOString() };
+          mockDb.daily_api_usage.push(row);
+        } else {
+          row.call_count += 1;
+        }
+        return { data: row.call_count, error: null };
+      }
+      return { data: null, error: null };
+    },
+  };
+}
+
+const mockSupabase = createMockSupabaseClient();
+
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: vi.fn(() => mockSupabase),
+}));
+
+describe("Review Processor / Orchestrator", () => {
+  const dummyJobId = "job-123";
+  const dummyRepoId = "repo-456";
+  const dummyInstallationId = "inst-789";
+
+  beforeEach(() => {
+    resetMockDb();
+    vi.restoreAllMocks();
+
+    // Populate base test data
+    mockDb.installations.push({
+      id: dummyInstallationId,
+      installation_id: 112233,
+      owner_id: "user-1",
+      account_login: "test-org",
+      account_type: "Organization",
+    });
+
+    mockDb.repos.push({
+      id: dummyRepoId,
+      installation_id: dummyInstallationId,
+      github_repo_id: 998877,
+      owner: "test-org",
+      name: "sample-repo",
+      full_name: "test-org/sample-repo",
+      is_active: true,
+    });
+
+    mockDb.repo_settings.push({
+      id: "settings-1",
+      repo_id: dummyRepoId,
+      ignored_paths: ["*.md"],
+      strictness: "balanced",
+      custom_instructions: "Check for security issues",
+    });
+
+    mockDb.review_jobs.push({
+      id: dummyJobId,
+      repo_id: dummyRepoId,
+      pr_number: 10,
+      pr_title: "Add features",
+      pr_author: "dev",
+      head_sha: "sha-head-1",
+      base_sha: "sha-base-1",
+      delivery_id: "deliv-1",
+      status: "pending",
+      retry_count: 0,
+      error_message: null,
+      total_chunks: null,
+      completed_chunks: 0,
+    });
+
+    // Mock GitHub Octokit
+    vi.spyOn(githubApp, "getInstallationOctokit").mockReturnValue({
+      rest: {
+        pulls: {
+          get: vi.fn().mockResolvedValue({ data: "diff --git a/file.ts b/file.ts\n+line" }),
+        },
+      },
+    } as any);
+
+    vi.spyOn(diffParser, "fetchDiff").mockResolvedValue(
+      "diff --git a/file.ts b/file.ts\n+line"
+    );
+
+    vi.spyOn(diffParser, "parseDiff").mockReturnValue([
+      {
+        index: 0,
+        file_path: "file.ts",
+        content: "@@ -1 +1,2 @@\n context\n+new line\n",
+        token_estimate: 20,
+      },
+    ] as any);
+  });
+
+  it("happy path: all chunks succeed -> job completed, reviews and comments saved", async () => {
+    vi.spyOn(geminiReview, "reviewChunk").mockResolvedValue({
+      chunk_summary: "Safe code additions.",
+      comments: [
+        {
+          file_path: "file.ts",
+          line_number: 2,
+          severity: "warning",
+          title: "Check edge cases",
+          body: "Input could be empty",
+        },
+      ],
+      severity_counts: { critical: 0, warning: 1, suggestion: 0, praise: 0 },
+    });
+
+    await processReview(dummyJobId);
+
+    const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+    expect(job?.status).toBe("completed");
+    expect(job?.completed_chunks).toBe(1);
+    expect(job?.total_chunks).toBe(1);
+    expect(mockDb.review_chunks.length).toBe(1);
+    expect(mockDb.review_chunks[0].status).toBe("completed");
+
+    expect(mockDb.reviews.length).toBe(1);
+    expect(mockDb.reviews[0].risk_score).toBe(10);
+    expect(mockDb.review_comments.length).toBe(1);
+    expect(mockDb.review_comments[0].title).toBe("Check edge cases");
+  });
+
+  it("one chunk fails (others saved): saves successful chunk, marks failed chunk as error", async () => {
+    vi.spyOn(diffParser, "parseDiff").mockReturnValue([
+      { index: 0, file_path: "good.ts", content: "+good", token_estimate: 4000 },
+      { index: 1, file_path: "bad.ts", content: "+bad", token_estimate: 4000 },
+    ] as any);
+
+    vi.spyOn(geminiReview, "reviewChunk")
+      .mockResolvedValueOnce({
+        chunk_summary: "Good chunk passed.",
+        comments: [],
+        severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+      })
+      .mockRejectedValueOnce(new Error("AI generation failure"));
+
+    await processReview(dummyJobId);
+
+    const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+    expect(job?.retry_count).toBe(1);
+    expect(job?.status).toBe("processing");
+
+    const goodChunk = mockDb.review_chunks.find((c) => c.file_path === "good.ts");
+    const badChunk = mockDb.review_chunks.find((c) => c.file_path === "bad.ts");
+
+    expect(goodChunk?.status).toBe("completed");
+    expect(badChunk?.status).toBe("error");
+  });
+
+  it("deadline hit (partial): saves completed chunks and marks job as partial with unreviewed file list", async () => {
+    process.env.GEMINI_CONCURRENCY = "1";
+
+    try {
+      vi.spyOn(diffParser, "parseDiff").mockReturnValue([
+        { index: 0, file_path: "finished.ts", content: "+ok", token_estimate: 4000 },
+        { index: 1, file_path: "skipped.ts", content: "+skip", token_estimate: 4000 },
+      ] as any);
+
+      vi.spyOn(geminiReview, "reviewChunk").mockImplementation(async () => {
+        // Fast-forward time past deadline after chunk 0 is reviewed
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 300_000);
+        return {
+          chunk_summary: "Finished first file.",
+          comments: [],
+          severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+        };
+      });
+
+      await processReview(dummyJobId);
+
+      const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+      expect(job?.status).toBe("partial");
+      expect(job?.error_message).toContain("timeout");
+
+      // Partial review is saved with unreviewed file note
+      expect(mockDb.reviews.length).toBe(1);
+      expect(mockDb.reviews[0].summary).toContain("skipped.ts");
+    } finally {
+      delete process.env.GEMINI_CONCURRENCY;
+    }
+  });
+
+  it("slow chunk times out after per-chunk limit (90s): chunk marked error", async () => {
+    process.env.GEMINI_CHUNK_TIMEOUT_MS = "50"; // 50ms for unit test
+
+    try {
+      vi.spyOn(geminiReview, "reviewChunk").mockImplementation(
+        () => new Promise((resolve) => setTimeout(resolve, 200))
+      );
+
+      await processReview(dummyJobId);
+
+      const chunk = mockDb.review_chunks[0];
+      expect(chunk?.status).toBe("error");
+    } finally {
+      delete process.env.GEMINI_CHUNK_TIMEOUT_MS;
+    }
+  });
+
+  it("503 retry -> success: reviews chunk successfully when retry succeeds", async () => {
+    let attempts = 0;
+    vi.spyOn(geminiReview, "reviewChunk").mockImplementation(async () => {
+      attempts++;
+      return {
+        chunk_summary: "Recovered from 503.",
+        comments: [],
+        severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+      };
+    });
+
+    await processReview(dummyJobId);
+
+    const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+    expect(job?.status).toBe("completed");
+    expect(mockDb.review_chunks[0].status).toBe("completed");
+  });
+
+  it("persistent 503 (retry_later): marks chunk as retry_later when Gemini service unavailable", async () => {
+    vi.spyOn(geminiReview, "reviewChunk").mockRejectedValue(
+      new geminiReview.UnavailableError("503 Service Unavailable")
+    );
+
+    await processReview(dummyJobId);
+
+    const chunk = mockDb.review_chunks[0];
+    expect(chunk?.status).toBe("retry_later");
+  });
+
+  it("rate-limited (429): calls reviewChunk with retry logic", async () => {
+    vi.spyOn(geminiReview, "reviewChunk").mockResolvedValue({
+      chunk_summary: "Handled rate limit.",
+      comments: [],
+      severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+    });
+
+    await processReview(dummyJobId);
+
+    const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+    expect(job?.status).toBe("completed");
+  });
+
+  it("budget exhausted (deferred): marks job as deferred without calling Gemini", async () => {
+    process.env.GEMINI_DAILY_LIMIT = "10";
+    const today = new Date().toISOString().slice(0, 10);
+    mockDb.daily_api_usage.push({
+      usage_date: today,
+      call_count: 10, // equal to limit
+      updated_at: new Date().toISOString(),
+    });
+
+    const geminiSpy = vi.spyOn(geminiReview, "reviewChunk");
+
+    try {
+      await processReview(dummyJobId);
+
+      const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+      expect(job?.status).toBe("deferred");
+      expect(job?.error_message).toContain("Daily Gemini API budget exhausted");
+      expect(geminiSpy).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.GEMINI_DAILY_LIMIT;
+    }
+  });
+
+  it("duplicate SHA reuse: reuses existing completed review for same head_sha", async () => {
+    // Add existing completed review for same repo and head_sha
+    mockDb.reviews.push({
+      id: "prev-review-1",
+      job_id: "prev-job-1",
+      repo_id: dummyRepoId,
+      head_sha: "sha-head-1", // matches dummyJobId head_sha
+      pr_number: 9,
+      pr_title: "Prior PR",
+      pr_author: "dev",
+      summary: "Prior review summary.",
+      risk_score: 25,
+      severity_counts: { critical: 1, warning: 0, suggestion: 0, praise: 0 },
+      inline_comment_count: 1,
+      review_duration_ms: 1200,
+    });
+
+    mockDb.review_comments.push({
+      id: "comment-1",
+      review_id: "prev-review-1",
+      file_path: "file.ts",
+      line_number: 10,
+      side: "RIGHT",
+      severity: "critical",
+      title: "Existing Bug",
+      body: "Already discovered issue",
+      suggestion: null,
+    });
+
+    const geminiSpy = vi.spyOn(geminiReview, "reviewChunk");
+
+    await processReview(dummyJobId);
+
+    const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+    expect(job?.status).toBe("completed");
+
+    // Copied review exists for this job
+    const newReview = mockDb.reviews.find((r) => r.job_id === dummyJobId);
+    expect(newReview).toBeDefined();
+    expect(newReview?.summary).toBe("Prior review summary.");
+    expect(newReview?.risk_score).toBe(25);
+
+    // No new Gemini call was made
+    expect(geminiSpy).not.toHaveBeenCalled();
+  });
+
+  it("merger de-duplication and severity ordering: merges multi-chunk comments sorted by severity with duplicates removed", async () => {
+    vi.spyOn(diffParser, "parseDiff").mockReturnValue([
+      { index: 0, file_path: "a.ts", content: "+codeA", token_estimate: 4000 },
+      { index: 1, file_path: "b.ts", content: "+codeB", token_estimate: 4000 },
+    ] as any);
+
+    vi.spyOn(geminiReview, "reviewChunk")
+      .mockResolvedValueOnce({
+        chunk_summary: "Chunk A summary.",
+        comments: [
+          {
+            file_path: "common.ts",
+            line_number: 10,
+            severity: "warning",
+            title: "Duplicate Issue",
+            body: "Same finding",
+          },
+          {
+            file_path: "a.ts",
+            line_number: 5,
+            severity: "praise",
+            title: "Nice function",
+            body: "Clean logic",
+          },
+        ],
+        severity_counts: { critical: 0, warning: 1, suggestion: 0, praise: 1 },
+      })
+      .mockResolvedValueOnce({
+        chunk_summary: "Chunk B summary.",
+        comments: [
+          {
+            file_path: "common.ts",
+            line_number: 10,
+            severity: "warning",
+            title: "Duplicate Issue",
+            body: "Same finding",
+          },
+          {
+            file_path: "b.ts",
+            line_number: 2,
+            severity: "critical",
+            title: "Security Risk",
+            body: "Injection flaw",
+          },
+        ],
+        severity_counts: { critical: 1, warning: 1, suggestion: 0, praise: 0 },
+      });
+
+    await processReview(dummyJobId);
+
+    const review = mockDb.reviews.find((r) => r.job_id === dummyJobId);
+    expect(review?.risk_score).toBe(35); // 1*25 (critical) + 1*10 (warning)
+
+    // Deduplicated from 4 comments to 3
+    expect(mockDb.review_comments.length).toBe(3);
+    const severities = mockDb.review_comments.map((c) => c.severity);
+    // Ordered: critical -> warning -> praise
+    expect(severities).toEqual(["critical", "warning", "praise"]);
+  });
+});
