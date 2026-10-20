@@ -7,8 +7,6 @@ export default defineConfig({
     globals: true,
     include: ["src/**/*.test.{ts,tsx}"],
     exclude: ["e2e/**", "node_modules/**"],
-    testTimeout: 30000,
-    fileParallelism: false,
   },
   resolve: {
     alias: {

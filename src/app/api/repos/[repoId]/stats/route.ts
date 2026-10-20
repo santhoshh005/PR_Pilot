@@ -12,6 +12,8 @@ const ParamsSchema = z.object({
   repoId: z.string().uuid("Invalid repository ID"),
 });
 
+const MAX_STATS_ROWS = 1000;
+
 const QuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(90).default(30),
 });
@@ -97,7 +99,8 @@ export async function GET(
       .select("id, risk_score, severity_counts, review_duration_ms, created_at")
       .eq("repo_id", repoId)
       .gte("created_at", cutoff)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: true })
+      .limit(MAX_STATS_ROWS);
 
     if (reviewsError) {
       console.error("[GET_REPO_STATS] Database error querying reviews:", reviewsError.message);

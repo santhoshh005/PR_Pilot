@@ -15,6 +15,7 @@ const mockUserClient = {
   },
   from: (table: string) => {
     let filters: Array<(row: any) => boolean> = [];
+    let limitVal: number | null = null;
 
     const chain: any = {
       select: () => chain,
@@ -27,17 +28,23 @@ const mockUserClient = {
         return chain;
       },
       order: () => chain,
+      limit: (n: number) => {
+        limitVal = n;
+        return chain;
+      },
       maybeSingle: async () => {
         const rows = mockRepos.filter((r) => filters.every((f) => f(r)));
         return { data: rows[0] || null, error: null };
       },
       then: (resolve: any) => {
         if (table === "repos") {
-          const rows = mockRepos.filter((r) => filters.every((f) => f(r)));
+          let rows = mockRepos.filter((r) => filters.every((f) => f(r)));
+          if (limitVal !== null) rows = rows.slice(0, limitVal);
           return resolve({ data: rows, error: null });
         }
         if (table === "reviews") {
-          const rows = mockReviews.filter((r) => filters.every((f) => f(r)));
+          let rows = mockReviews.filter((r) => filters.every((f) => f(r)));
+          if (limitVal !== null) rows = rows.slice(0, limitVal);
           return resolve({ data: rows, error: null });
         }
         return resolve({ data: [], error: null });
@@ -161,5 +168,28 @@ describe("GET /api/repos/[repoId]/stats", () => {
       avg_risk_score: 80, // (70 + 90) / 2
       review_count: 2,
     });
+  });
+
+  it("enforces a hard row cap of 1000 reviews on stats query", async () => {
+    const today = "2026-10-20";
+    // Generate 1200 reviews
+    mockReviews = Array.from({ length: 1200 }, (_, i) => ({
+      id: `rev-${i}`,
+      repo_id: validRepoId,
+      risk_score: 50,
+      severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+      review_duration_ms: 1000,
+      created_at: `${today}T12:00:00Z`,
+    }));
+
+    const { GET } = await import("./route");
+    const req = new Request(`http://localhost:3000/api/repos/${validRepoId}/stats?days=30`);
+
+    const res = await GET(req, { params: Promise.resolve({ repoId: validRepoId }) });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    // Since query caps at 1000 rows, total_reviews should be exactly 1000
+    expect(body.total_reviews).toBe(1000);
   });
 });
