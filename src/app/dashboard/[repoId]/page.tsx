@@ -4,7 +4,11 @@ import { notFound, redirect } from "next/navigation";
 import { createUserClient } from "@/lib/supabase/server";
 import { Badge } from "@/components/ui/badge";
 import { ReviewList } from "@/components/dashboard/review-list";
+import { SeverityChart } from "@/components/dashboard/severity-chart";
+import { RiskTrendChart } from "@/components/dashboard/risk-trend-chart";
+import { mapReviewsToDailyStats } from "@/lib/review/stats-mapper";
 import { ReviewItem, ReviewCommentItem } from "@/components/dashboard/review-detail-modal";
+import { SeverityBreakdown, RiskScoreTrend } from "@/types";
 
 export const instant = false;
 
@@ -57,6 +61,9 @@ export default async function RepoReviewsPage({
 
   let reviews: ReviewItem[] = [];
   let totalReviewsCount = 0;
+  let severityData: SeverityBreakdown[] = [];
+  let trendData: RiskScoreTrend[] = [];
+  let statsHasError = false;
   let hasError = false;
 
   try {
@@ -78,7 +85,26 @@ export default async function RepoReviewsPage({
     }
 
     if (repo) {
-      // 2. Fetch Paginated Reviews
+      // 2. Fetch stats for charts within 30 days lookback (bounded)
+      const statsCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: statsReviewsData, error: statsError } = await userClient
+        .from("reviews")
+        .select("id, risk_score, severity_counts, review_duration_ms, created_at")
+        .eq("repo_id", repoId)
+        .gte("created_at", statsCutoff)
+        .order("created_at", { ascending: false })
+        .limit(1000);
+
+      if (statsError) {
+        console.error("[REPO_PAGE] Failed to fetch review stats:", statsError.message);
+        statsHasError = true;
+      } else if (statsReviewsData) {
+        const statsResult = mapReviewsToDailyStats(statsReviewsData, 30);
+        severityData = statsResult.severityBreakdown;
+        trendData = statsResult.riskTrend;
+      }
+
+      // 3. Fetch Paginated Reviews
       const offset = (page - 1) * limit;
       const {
         data: reviewsData,
@@ -210,14 +236,25 @@ export default async function RepoReviewsPage({
         </div>
       </div>
 
-      {/* Review List */}
-      <ReviewList
-        reviews={reviews}
-        totalCount={totalReviewsCount}
-        currentPage={page}
-        limit={limit}
-        repoId={repoId}
-      />
+      {/* Analytics Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <SeverityChart data={severityData} hasError={statsHasError} />
+        <RiskTrendChart data={trendData} hasError={statsHasError} />
+      </div>
+
+      {/* Review History */}
+      <div className="space-y-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+          Review History
+        </h2>
+        <ReviewList
+          reviews={reviews}
+          totalCount={totalReviewsCount}
+          currentPage={page}
+          limit={limit}
+          repoId={repoId}
+        />
+      </div>
     </div>
   );
 }

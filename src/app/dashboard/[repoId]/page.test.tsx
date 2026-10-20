@@ -11,6 +11,13 @@ let mockDbError: Error | null = null;
 const mockRedirect = vi.fn();
 const mockNotFound = vi.fn();
 
+// Mock ResizeObserver for recharts in jsdom
+global.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
     mockRedirect(url);
@@ -49,6 +56,14 @@ vi.mock("@/lib/supabase/server", () => ({
         return {
           select: vi.fn(() => ({
             eq: vi.fn(() => ({
+              gte: vi.fn(() => ({
+                order: vi.fn(() => ({
+                  limit: vi.fn(async () => {
+                    if (mockDbError) return { data: null, error: mockDbError };
+                    return { data: mockReviewsData, error: null };
+                  }),
+                })),
+              })),
               order: vi.fn(() => ({
                 range: vi.fn(async () => {
                   if (mockDbError) return { data: null, error: mockDbError, count: null };
@@ -181,6 +196,9 @@ describe("Repo Reviews Page (RSC)", { timeout: 15000 }, () => {
     render(Component);
 
     expect(screen.getByRole("heading", { name: "facebook/react" })).toBeDefined();
+    expect(screen.getByText("Severity Breakdown")).toBeDefined();
+    expect(screen.getByText("Risk Score Trend")).toBeDefined();
+    expect(screen.getByText("Review History")).toBeDefined();
     expect(screen.getByText(/#100 Refactor hooks/i)).toBeDefined();
     expect(screen.getByText("gaearon")).toBeDefined();
     expect(screen.getByRole("link", { name: /settings/i })).toBeDefined();
