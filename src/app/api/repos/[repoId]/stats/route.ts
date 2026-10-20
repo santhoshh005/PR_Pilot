@@ -105,7 +105,7 @@ export async function GET(
       .select("id, risk_score, severity_counts, review_duration_ms, created_at")
       .eq("repo_id", repoId)
       .gte("created_at", cutoff)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(MAX_STATS_ROWS);
 
     if (reviewsError) {
