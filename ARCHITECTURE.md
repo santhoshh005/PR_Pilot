@@ -46,7 +46,7 @@ sequenceDiagram
   WH->>DB: INSERT review_jobs (status=pending)
   WH-->>GH: 200 OK (< 3s)
 
-  Note over CRON: GitHub Actions Cron (every 5 min)<br/>calls /api/cron/process-reviews
+  Note over CRON: GitHub Actions Cron (every 30 min by default, 5 if repo is public)<br/>calls /api/cron/process-reviews
   CRON->>DB: SELECT pending review_jobs (LIMIT 3, FOR UPDATE SKIP LOCKED)
   CRON->>DB: UPDATE status=processing
   CRON->>GHAPI: GET /repos/{owner}/{repo}/pulls/{number} (Accept: diff)
@@ -81,15 +81,15 @@ sequenceDiagram
 
 For jobs that didn't complete in `waitUntil` (very large PRs, or if the function was recycled):
 
-1. **Cron route** (`/api/cron/process-reviews`): Triggered by a GitHub Actions scheduled workflow (`.github/workflows/cron.yml`) every 5 minutes with `CRON_SECRET` header. (Vercel Cron is not used due to Hobby plan daily frequency restrictions).
-2. Route sets `export const maxDuration = 300`. Picks jobs with `status = 'processing'` that have been stale for > 3 minutes, or `status = 'pending'` (missed by `waitUntil`).
+1. **Cron route** (`/api/cron/process-reviews`): Triggered by a GitHub Actions scheduled workflow (`.github/workflows/cron.yml`) every 30 minutes by default (5 minutes if the repository is public) with `CRON_SECRET` header. (Vercel Cron is not used due to Hobby plan daily frequency restrictions).
+2. Route sets `export const maxDuration = 300`. Picks jobs with `status = 'processing'` that have been stale for > 3 minutes, or `status = 'pending'` (missed by `waitUntil`). Worst-case stale recovery time: with a 180s (3-minute) stale threshold and a 30-minute cron interval, a stuck job will wait up to ~33 minutes before being picked up and recovered (or ~8 minutes if the public 5-minute schedule is configured).
 3. Uses `SELECT ... FOR UPDATE SKIP LOCKED` to prevent duplicate processing.
 4. Resumes from the last completed chunk and continues with the same 250s hard deadline budget.
 
 ### Why this hybrid works
 
 - **Median latency < 30s**: Most PRs (< 5 files) finish in a single `waitUntil` call, giving near-instant reviews.
-- **No extra infrastructure**: Uses Vercel Fluid Compute for execution and free GitHub Actions for the 5-minute schedule trigger.
+- **No extra infrastructure**: Uses Vercel Fluid Compute for execution and free GitHub Actions for the 30-minute (or 5-minute public) schedule trigger.
 - **Graceful degradation**: The cron catches anything `waitUntil` misses.
 - **Free tier safe**: Fluid Compute only bills active CPU time. I/O wait (Gemini API latency) doesn't count, so typical usage stays well under 4h/month.
 
@@ -116,7 +116,7 @@ A `review_jobs` Postgres table with `SELECT ... FOR UPDATE SKIP LOCKED` acts as 
 `gemini-3.8-flash` is the most capable Flash model, free tier, 1M token context, structured output support. **Why**: Handles large diffs in a single call per chunk, reducing latency and API calls versus a less capable model that needs more retries.
 
 ### 3. `waitUntil` primary + GitHub Actions Cron fallback (not queue-only, not separate worker)
-The webhook handler uses `waitUntil` from `@vercel/functions` to process reviews in-band after responding, with a GitHub Actions 5-minute scheduled workflow as a safety net for incomplete jobs. **Why**: Achieves < 30s median review latency, avoids Vercel Hobby cron limitations, and gracefully handles the 300s timeout with a 250s deadline.
+The webhook handler uses `waitUntil` from `@vercel/functions` to process reviews in-band after responding, with a GitHub Actions scheduled workflow (every 30 minutes by default, 5 minutes if the repository is public) as a safety net for incomplete jobs. **Why**: Achieves < 30s median review latency, avoids Vercel Hobby cron limitations, and gracefully handles the 300s timeout with a 250s deadline.
 
 ### 4. Supabase Auth with GitHub OAuth (not custom OAuth flow)
 Supabase Auth handles the OAuth dance, session tokens, and refresh. **Why**: Eliminates ~300 lines of auth code, provides secure cookie-based sessions via `@supabase/ssr`, and the GitHub provider gives us the user's GitHub identity for RLS.

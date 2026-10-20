@@ -482,11 +482,9 @@ describe("Review Processor / Orchestrator", () => {
     const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
     expect(job?.status).toBe("completed");
 
-    // Copied review exists for this job
-    const newReview = mockDb.reviews.find((r) => r.job_id === dummyJobId);
-    expect(newReview).toBeDefined();
-    expect(newReview?.summary).toBe("Prior review summary.");
-    expect(newReview?.risk_score).toBe(25);
+    // No duplicate review row is created; existing review row is reused
+    expect(mockDb.reviews.length).toBe(1);
+    expect(mockDb.reviews[0].id).toBe("prev-review-1");
 
     // No new Gemini call was made
     expect(geminiSpy).not.toHaveBeenCalled();
@@ -649,6 +647,96 @@ describe("Review Processor / Orchestrator", () => {
       expect(otherNotes[0]).toContain("line 99");
       expect(otherNotes[1]).toContain("src/fileB.ts");
       expect(otherNotes[1]).toContain("line 999");
+    });
+  });
+
+  describe("Group B - Correctness Tests (Atomic Budget, Context Failures, Duplicate SHA)", () => {
+    it("fails chunk immediately without calling Gemini when increment_daily_api_usage RPC fails", async () => {
+      vi.spyOn(mockSupabase, "rpc").mockResolvedValueOnce({
+        data: null,
+        error: new Error("RPC increment failure"),
+      });
+      const reviewChunkSpy = vi.spyOn(geminiReview, "reviewChunk");
+
+      await processReview(dummyJobId);
+
+      // Gemini reviewChunk must NOT be called
+      expect(reviewChunkSpy).not.toHaveBeenCalled();
+
+      // Chunk marked as error
+      const chunk = mockDb.review_chunks.find((c) => c.job_id === dummyJobId);
+      expect(chunk?.status).toBe("error");
+    });
+
+    it("marks job as failed with clear reason when loadJobContext fails (e.g. repo not found)", async () => {
+      // Clear repo from DB so loadJobContext fails to load repo
+      mockDb.repos = [];
+
+      await processReview(dummyJobId);
+
+      const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+      expect(job?.status).toBe("failed");
+      expect(job?.error_message).toContain("Associated repository not found");
+    });
+
+    it("handles multiple redeliveries of the same SHA by creating only one review row without copying", async () => {
+      vi.spyOn(geminiReview, "reviewChunk").mockResolvedValue({
+        chunk_summary: "Safe code additions.",
+        comments: [],
+        severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+      });
+
+      // 1st delivery
+      await processReview(dummyJobId);
+      expect(mockDb.reviews.filter((r) => r.head_sha === "sha-head-1").length).toBe(1);
+
+      // 2nd delivery (new job for same repo and head_sha)
+      const secondJobId = "job-redelivery-2";
+      mockDb.review_jobs.push({
+        id: secondJobId,
+        repo_id: dummyRepoId,
+        pr_number: 10,
+        pr_title: "Add features",
+        pr_author: "dev",
+        head_sha: "sha-head-1",
+        base_sha: "sha-base-1",
+        delivery_id: "deliv-2",
+        status: "pending",
+        retry_count: 0,
+        error_message: null,
+        total_chunks: null,
+        completed_chunks: 0,
+      });
+
+      await processReview(secondJobId);
+
+      // 3rd delivery
+      const thirdJobId = "job-redelivery-3";
+      mockDb.review_jobs.push({
+        id: thirdJobId,
+        repo_id: dummyRepoId,
+        pr_number: 10,
+        pr_title: "Add features",
+        pr_author: "dev",
+        head_sha: "sha-head-1",
+        base_sha: "sha-base-1",
+        delivery_id: "deliv-3",
+        status: "pending",
+        retry_count: 0,
+        error_message: null,
+        total_chunks: null,
+        completed_chunks: 0,
+      });
+
+      await processReview(thirdJobId);
+
+      // 3 deliveries of the same SHA must create exactly ONE review row in reviews table
+      const matchingReviews = mockDb.reviews.filter((r) => r.head_sha === "sha-head-1");
+      expect(matchingReviews.length).toBe(1);
+
+      // Both redelivery jobs marked completed
+      expect(mockDb.review_jobs.find((j) => j.id === secondJobId)?.status).toBe("completed");
+      expect(mockDb.review_jobs.find((j) => j.id === thirdJobId)?.status).toBe("completed");
     });
   });
 });

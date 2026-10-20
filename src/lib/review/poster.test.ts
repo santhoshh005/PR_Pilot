@@ -412,6 +412,78 @@ describe("postReviewToGitHub — Integration with Mocked Octokit", () => {
     expect(updateArgs.body).toContain(`<!-- prpilot:repo:${dummyRepoId} -->`);
   });
 
+  describe("Group B - Poster Inline-only Path Error Handling", () => {
+    it("in update existing review path, catches 422 gracefully, sets inlineCommentsPosted to 0, and flags fallbackToSummaryOnly", async () => {
+      mockOctokit.rest.pulls.listReviews.mockResolvedValueOnce({
+        data: [
+          {
+            id: 555666,
+            body: `<!-- prpilot:repo:${dummyRepoId} --> Old review summary`,
+          },
+        ],
+      });
+
+      // Mock createReview for inline comments to throw 422
+      mockOctokit.rest.pulls.createReview.mockRejectedValueOnce({
+        status: 422,
+        message: "Unprocessable Entity - invalid line position",
+      });
+
+      const params: PostReviewParams = {
+        octokit: mockOctokit,
+        owner: "acme",
+        repo: "web-app",
+        repoId: dummyRepoId,
+        prNumber: 42,
+        commitSha: "sha-new-push",
+        fullReview: sampleReview,
+        reviewDurationMs: 8000,
+        chunkCount: 1,
+        validLineNumbersByFile: validLines,
+      };
+
+      const result = await postReviewToGitHub(params);
+
+      expect(result.updatedExistingComment).toBe(true);
+      expect(result.inlineCommentsPosted).toBe(0);
+      expect(result.fallbackToSummaryOnly).toBe(true);
+    });
+
+    it("in update existing review path, rethrows non-422 errors (e.g. 500 internal server error)", async () => {
+      mockOctokit.rest.pulls.listReviews.mockResolvedValueOnce({
+        data: [
+          {
+            id: 555666,
+            body: `<!-- prpilot:repo:${dummyRepoId} --> Old review summary`,
+          },
+        ],
+      });
+
+      // Mock createReview for inline comments to throw 500
+      mockOctokit.rest.pulls.createReview.mockRejectedValueOnce({
+        status: 500,
+        message: "Internal Server Error from GitHub",
+      });
+
+      const params: PostReviewParams = {
+        octokit: mockOctokit,
+        owner: "acme",
+        repo: "web-app",
+        repoId: dummyRepoId,
+        prNumber: 42,
+        commitSha: "sha-new-push",
+        fullReview: sampleReview,
+        reviewDurationMs: 8000,
+        chunkCount: 1,
+        validLineNumbersByFile: validLines,
+      };
+
+      await expect(postReviewToGitHub(params)).rejects.toMatchObject({
+        status: 500,
+      });
+    });
+  });
+
   it("duplicate SHA not reposted: skips posting if SHA already reviewed", async () => {
     const params: PostReviewParams = {
       octokit: mockOctokit,

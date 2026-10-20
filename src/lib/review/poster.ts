@@ -217,8 +217,11 @@ async function handleExistingReviewUpdate(
     body: summaryBody,
   });
 
+  let actualInlinePosted = inlinePosted;
+  let fallbackToSummaryOnly = false;
+
   if (formattedComments.length > 0) {
-    await submitInlineCommentsOnly(
+    const inlineResult = await submitInlineCommentsOnly(
       octokit,
       owner,
       repo,
@@ -226,15 +229,19 @@ async function handleExistingReviewUpdate(
       commitSha,
       formattedComments
     );
+    if (!inlineResult.success) {
+      actualInlinePosted = 0;
+      fallbackToSummaryOnly = true;
+    }
   }
 
   return {
     githubReviewId: existingReviewId,
     updatedExistingComment: true,
-    inlineCommentsPosted: inlinePosted,
-    inlineCommentsDropped: inlineDropped,
+    inlineCommentsPosted: actualInlinePosted,
+    inlineCommentsDropped: inlineDropped + (formattedComments.length - actualInlinePosted),
     omittedComments: omittedCount,
-    fallbackToSummaryOnly: false,
+    fallbackToSummaryOnly,
   };
 }
 
@@ -245,7 +252,7 @@ async function submitInlineCommentsOnly(
   prNumber: number,
   commitSha: string,
   comments: GitHubReviewCommentPayload[]
-): Promise<void> {
+): Promise<{ success: boolean }> {
   try {
     await octokit.rest.pulls.createReview({
       owner,
@@ -255,8 +262,12 @@ async function submitInlineCommentsOnly(
       event: "COMMENT",
       comments,
     });
-  } catch {
-    // Graceful fallback: inline comments for new commit may be out-of-date or 422
+    return { success: true };
+  } catch (err: unknown) {
+    if (is422Error(err)) {
+      return { success: false };
+    }
+    throw err;
   }
 }
 

@@ -64,8 +64,20 @@ export async function processReview(jobId: string): Promise<void> {
   let pipelineCompleted = false;
 
   try {
-    const jobContext = await loadJobContext(supabase, jobId);
-    if (!jobContext) return;
+    const { context: jobContext, errorReason } = await loadJobContext(supabase, jobId);
+    if (!jobContext) {
+      if (errorReason) {
+        await supabase
+          .from("review_jobs")
+          .update({
+            status: "failed",
+            error_message: errorReason,
+            completed_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+      }
+      return;
+    }
 
     await runReviewPipeline(supabase, jobContext, startTime);
     pipelineCompleted = true;
@@ -171,27 +183,32 @@ function buildReviewContext(
   };
 }
 
+interface LoadedJobContext {
+  context: JobContext | null;
+  errorReason?: string;
+}
+
 async function loadJobContext(
   supabase: SupabaseClient,
   jobId: string
-): Promise<JobContext | null> {
+): Promise<LoadedJobContext> {
   const { data: job, error: jobError } = await supabase
     .from("review_jobs")
     .select("*")
     .eq("id", jobId)
     .single();
 
-  if (jobError || !job) return null;
-  if (job.status !== "pending" && job.status !== "processing") return null;
+  if (jobError || !job) return { context: null };
+  if (job.status !== "pending" && job.status !== "processing") return { context: null };
 
   const repo = await loadRepo(supabase, job.repo_id);
-  if (!repo) return null;
+  if (!repo) return { context: null, errorReason: "Associated repository not found" };
 
   const installation = await loadInstallation(supabase, repo.installation_id);
-  if (!installation) return null;
+  if (!installation) return { context: null, errorReason: "Associated installation not found" };
 
   const settings = await loadSettings(supabase, repo.id);
-  return { job, repo, installation, settings };
+  return { context: { job, repo, installation, settings } };
 }
 
 async function loadRepo(supabase: SupabaseClient, repoId: string): Promise<Repo | null> {
@@ -262,15 +279,14 @@ async function checkDuplicateShaReview(
 ): Promise<boolean> {
   const { data: existingReview } = await supabase
     .from("reviews")
-    .select("*")
+    .select("id")
     .eq("repo_id", job.repo_id)
     .eq("head_sha", job.head_sha)
     .maybeSingle();
 
   if (!existingReview) return false;
 
-  await copyExistingReview(supabase, job, existingReview);
-
+  // Duplicate SHA: complete this review job without duplicating the review row
   await supabase
     .from("review_jobs")
     .update({
@@ -280,49 +296,6 @@ async function checkDuplicateShaReview(
     .eq("id", job.id);
 
   return true;
-}
-
-async function copyExistingReview(
-  supabase: SupabaseClient,
-  job: ReviewJob,
-  existingReview: any
-): Promise<void> {
-  const { data: existingComments } = await supabase
-    .from("review_comments")
-    .select("*")
-    .eq("review_id", existingReview.id);
-
-  const { data: newReview } = await supabase
-    .from("reviews")
-    .insert({
-      job_id: job.id,
-      repo_id: job.repo_id,
-      pr_number: job.pr_number,
-      pr_title: job.pr_title,
-      pr_author: job.pr_author,
-      head_sha: job.head_sha,
-      summary: existingReview.summary,
-      risk_score: existingReview.risk_score,
-      severity_counts: existingReview.severity_counts,
-      inline_comment_count: existingReview.inline_comment_count,
-      review_duration_ms: existingReview.review_duration_ms,
-    })
-    .select("id")
-    .single();
-
-  if (newReview && existingComments && existingComments.length > 0) {
-    const commentsToInsert = existingComments.map((c: any) => ({
-      review_id: newReview.id,
-      file_path: c.file_path,
-      line_number: c.line_number,
-      side: c.side || "RIGHT",
-      severity: c.severity,
-      title: c.title,
-      body: c.body,
-      suggestion: c.suggestion,
-    }));
-    await supabase.from("review_comments").insert(commentsToInsert);
-  }
 }
 
 async function checkDailyBudgetExhausted(
@@ -541,19 +514,7 @@ async function reviewWithTimeout(
 async function incrementUsage(supabase: SupabaseClient): Promise<void> {
   const { error } = await supabase.rpc("increment_daily_api_usage");
   if (error) {
-    const today = new Date().toISOString().slice(0, 10);
-    const { data: row } = await supabase
-      .from("daily_api_usage")
-      .select("call_count")
-      .eq("usage_date", today)
-      .maybeSingle();
-
-    const nextCount = (row?.call_count ?? 0) + 1;
-    await supabase.from("daily_api_usage").upsert({
-      usage_date: today,
-      call_count: nextCount,
-      updated_at: new Date().toISOString(),
-    });
+    throw new Error(`Failed to increment daily API usage: ${error.message}`);
   }
 }
 

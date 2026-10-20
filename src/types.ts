@@ -59,7 +59,11 @@ export type ReviewJobStatus =
   | "processing"
   | "completed"
   | "error"
-  | "skipped";
+  | "failed"
+  | "skipped"
+  | "deferred"
+  | "partial"
+  | "queued";
 
 export interface ReviewJob {
   id: string;
@@ -80,7 +84,12 @@ export interface ReviewJob {
   created_at: string;
 }
 
-export type ChunkStatus = "pending" | "processing" | "completed" | "error";
+export type ChunkStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "error"
+  | "retry_later";
 
 export interface ReviewChunk {
   id: string;
