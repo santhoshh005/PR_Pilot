@@ -403,7 +403,9 @@ export function formatInlineComments(
 
     if (comment.suggestion && comment.suggestion.trim().length > 0) {
       const cleanSuggestion = sanitizeSuggestion(comment.suggestion);
-      body += `\n\n\`\`\`suggestion\n${cleanSuggestion}\n\`\`\``;
+      if (cleanSuggestion) {
+        body += `\n\n### Suggested change (review before applying)\n\`\`\`text\n${cleanSuggestion}\n\`\`\``;
+      }
     }
 
     return {
@@ -413,6 +415,44 @@ export function formatInlineComments(
       body,
     };
   });
+}
+
+export function isDangerousSuggestion(code: string): boolean {
+  if (!code) return false;
+
+  // 1. curl or wget piped to a shell
+  if (/(?:curl|wget)\b.*\|\s*(?:ba|z|c|k|t?c)?sh\b/i.test(code)) return true;
+
+  // 2. rm -rf
+  if (
+    /rm\s+-[a-zA-Z]*r[a-zA-Z]*f/i.test(code) ||
+    /rm\s+-[a-zA-Z]*f[a-zA-Z]*r/i.test(code)
+  ) {
+    return true;
+  }
+
+  // 3. eval of remote code or dangerous eval
+  if (/\beval\s*\(/i.test(code)) return true;
+
+  // 4. base64-decoded execution
+  if (/base64\s+(?:-[a-zA-Z]*d|--decode)\s*\|/i.test(code)) return true;
+
+  // 5. edits to CI workflow files
+  if (/\.github\/workflows/i.test(code)) return true;
+
+  // 6. credentials and tokens
+  if (
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{16,}/i.test(code) ||
+    /\b(?:AKIA|ASIA)[A-Za-z0-9]{16}\b/i.test(code) ||
+    /\bAWS_SECRET_ACCESS_KEY\b/i.test(code) ||
+    /\bGITHUB_TOKEN\b/i.test(code) ||
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----/i.test(code) ||
+    /id_rsa\b/i.test(code)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 export function sanitizeText(text: string): string {
@@ -434,11 +474,21 @@ export function sanitizeText(text: string): string {
   return sanitized;
 }
 
-function sanitizeSuggestion(code: string): string {
-  return code
-    .replace(/@([a-zA-Z0-9_\-\/]+)/g, "@ $1")
-    .slice(0, 500)
-    .trim();
+export function sanitizeSuggestion(code: string): string | null {
+  if (!code || isDangerousSuggestion(code)) {
+    return null;
+  }
+
+  let sanitized = code;
+
+  // Neutralise @mentions
+  sanitized = sanitized.replace(/@([a-zA-Z0-9_\-\/]+)/g, "@ $1");
+
+  // Strip or neutralise triple backticks so it cannot escape the fence
+  sanitized = sanitized.replace(/```/g, "'''");
+
+  // Cap length to 500 chars
+  return sanitized.slice(0, 500).trim();
 }
 
 export function buildReviewSummaryBody(params: {

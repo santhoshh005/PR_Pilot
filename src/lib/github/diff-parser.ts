@@ -38,6 +38,8 @@ export interface ParsedDiffChunk extends DiffChunk {
   hunk_line_numbers?: Set<number>;
   line_numbers?: Set<number>;
   hunks?: HunkInfo[];
+  file_hunk_line_numbers?: Map<string, Set<number>>;
+  file_paths?: string[];
 }
 
 export interface ParseDiffResult extends Array<ParsedDiffChunk> {

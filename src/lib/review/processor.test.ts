@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { processReview } from "./processor";
+import { processReview, combineSmallChunks, collectValidLines } from "./processor";
+import { validateAndFilterComments } from "./poster";
 import { CONFIG } from "@/types";
 import * as diffParser from "@/lib/github/diff-parser";
 import * as geminiReview from "@/lib/gemini/review";
@@ -549,5 +550,105 @@ describe("Review Processor / Orchestrator", () => {
     const severities = mockDb.review_comments.map((c) => c.severity);
     // Ordered: critical -> warning -> praise
     expect(severities).toEqual(["critical", "warning", "praise"]);
+  });
+
+  describe("Group A - Try/Finally on Deadline & CombineSmallChunks Line Validation", () => {
+    it("try/finally ensures job reaches a terminal/retryable status when pipeline throws mid-run, never left in processing", async () => {
+      // Mock diffParser to throw an unexpected error mid-pipeline after job is set to 'processing'
+      vi.spyOn(diffParser, "fetchDiff").mockImplementationOnce(() => {
+        throw new Error("Fatal network disconnection mid-run");
+      });
+
+      await processReview(dummyJobId);
+
+      const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+      expect(job?.status).not.toBe("processing");
+      expect(["failed", "error"]).toContain(job?.status);
+      expect(job?.error_message).toBeTruthy();
+    });
+
+    it("combineSmallChunks merges hunk_line_numbers per file, does not use comma-joined path, and validates line numbers per file", () => {
+      const chunk1 = {
+        index: 0,
+        file_path: "src/fileA.ts",
+        content: "@@ -1,2 +1,3 @@\n context\n+lineA\n",
+        token_estimate: 50,
+        hunk_line_numbers: new Set([2]),
+      };
+      const chunk2 = {
+        index: 1,
+        file_path: "src/fileB.ts",
+        content: "@@ -10,2 +10,3 @@\n context\n+lineB\n",
+        token_estimate: 60,
+        hunk_line_numbers: new Set([11]),
+      };
+
+      const combined = combineSmallChunks([chunk1 as any, chunk2 as any]);
+
+      expect(combined.length).toBe(1);
+      const singleCombined = combined[0];
+
+      // Never use comma-joined path
+      expect(singleCombined.file_path).not.toContain(",");
+      expect(singleCombined.file_path).toBe("src/fileA.ts");
+
+      // Valid line numbers collection per file
+      const validLinesMap = collectValidLines(combined);
+      expect(validLinesMap.get("src/fileA.ts")).toBeDefined();
+      expect(validLinesMap.get("src/fileA.ts")?.has(2)).toBe(true);
+      expect(validLinesMap.get("src/fileB.ts")).toBeDefined();
+      expect(validLinesMap.get("src/fileB.ts")?.has(11)).toBe(true);
+
+      // Verify line validation: real lines are valid (inline), hallucinated lines are invalid (otherNotes)
+      const comments = [
+        {
+          file_path: "src/fileA.ts",
+          line_number: 2, // Real line in diff
+          severity: "warning" as const,
+          title: "Real issue in file A",
+          body: "Details",
+        },
+        {
+          file_path: "src/fileA.ts",
+          line_number: 99, // Hallucinated line
+          severity: "suggestion" as const,
+          title: "Hallucinated issue in file A",
+          body: "Details",
+        },
+        {
+          file_path: "src/fileB.ts",
+          line_number: 11, // Real line in diff
+          severity: "warning" as const,
+          title: "Real issue in file B",
+          body: "Details",
+        },
+        {
+          file_path: "src/fileB.ts",
+          line_number: 999, // Hallucinated line
+          severity: "suggestion" as const,
+          title: "Hallucinated issue in file B",
+          body: "Details",
+        },
+      ];
+
+      const { inlineComments, otherNotes } = validateAndFilterComments(
+        comments,
+        validLinesMap
+      );
+
+      // Only real lines remain inline
+      expect(inlineComments.length).toBe(2);
+      expect(inlineComments.map((c) => `${c.file_path}:${c.line_number}`)).toEqual([
+        "src/fileA.ts:2",
+        "src/fileB.ts:11",
+      ]);
+
+      // Hallucinated lines moved to otherNotes
+      expect(otherNotes.length).toBe(2);
+      expect(otherNotes[0]).toContain("src/fileA.ts");
+      expect(otherNotes[0]).toContain("line 99");
+      expect(otherNotes[1]).toContain("src/fileB.ts");
+      expect(otherNotes[1]).toContain("line 999");
+    });
   });
 });

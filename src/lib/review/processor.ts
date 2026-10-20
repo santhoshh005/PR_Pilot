@@ -61,14 +61,39 @@ interface ChunkExecutionResult {
 export async function processReview(jobId: string): Promise<void> {
   const supabase = createServiceClient();
   const startTime = Date.now();
+  let pipelineCompleted = false;
 
   try {
     const jobContext = await loadJobContext(supabase, jobId);
     if (!jobContext) return;
 
     await runReviewPipeline(supabase, jobContext, startTime);
+    pipelineCompleted = true;
   } catch (error: unknown) {
     await handleProcessReviewError(supabase, jobId, error);
+  } finally {
+    if (!pipelineCompleted) {
+      try {
+        const { data: job } = await supabase
+          .from("review_jobs")
+          .select("status, retry_count, error_message")
+          .eq("id", jobId)
+          .maybeSingle();
+
+        if (job && job.status === "processing") {
+          await supabase
+            .from("review_jobs")
+            .update({
+              status: "failed",
+              error_message: job.error_message || "unexpected termination",
+              completed_at: new Date().toISOString(),
+            })
+            .eq("id", jobId);
+        }
+      } catch (finallyErr) {
+        console.error(`[PROCESS_REVIEW] Finally block cleanup failed for ${jobId}:`, finallyErr);
+      }
+    }
   }
 }
 
@@ -351,7 +376,7 @@ async function prepareDiffChunks(
   return combineSmallChunks(parsedChunks);
 }
 
-function combineSmallChunks(chunks: ParsedDiffChunk[]): ParsedDiffChunk[] {
+export function combineSmallChunks(chunks: ParsedDiffChunk[]): ParsedDiffChunk[] {
   if (chunks.length <= 1) return chunks;
 
   const totalTokens = chunks.reduce((acc, c) => acc + c.token_estimate, 0);
@@ -360,12 +385,33 @@ function combineSmallChunks(chunks: ParsedDiffChunk[]): ParsedDiffChunk[] {
       .map((c) => `# File: ${c.file_path}\n${c.content}`)
       .join("\n\n");
 
+    const fileHunkLineNumbers = new Map<string, Set<number>>();
+    for (const c of chunks) {
+      if (c.file_hunk_line_numbers) {
+        for (const [fp, set] of c.file_hunk_line_numbers.entries()) {
+          const existing = fileHunkLineNumbers.get(fp) || new Set<number>();
+          for (const line of set) existing.add(line);
+          fileHunkLineNumbers.set(fp, existing);
+        }
+      }
+      const lines = c.hunk_line_numbers || c.line_numbers;
+      if (lines && c.file_path) {
+        const existing = fileHunkLineNumbers.get(c.file_path) || new Set<number>();
+        for (const line of lines) existing.add(line);
+        fileHunkLineNumbers.set(c.file_path, existing);
+      }
+    }
+
+    const filePaths = Array.from(new Set(chunks.map((c) => c.file_path)));
+
     return [
       {
         index: 0,
-        file_path: chunks.map((c) => c.file_path).join(", "),
+        file_path: filePaths[0],
+        file_paths: filePaths,
         content: combinedContent,
         token_estimate: totalTokens,
+        file_hunk_line_numbers: fileHunkLineNumbers,
       },
     ];
   }
@@ -682,18 +728,31 @@ async function postReviewSafely(
   }
 }
 
-function collectValidLines(chunks: ParsedDiffChunk[]): Map<string, Set<number>> {
+export function collectValidLines(chunks: ParsedDiffChunk[]): Map<string, Set<number>> {
   const map = new Map<string, Set<number>>();
   for (const chunk of chunks) {
-    const lines = chunk.hunk_line_numbers || chunk.line_numbers;
-    if (lines && lines.size > 0) {
-      let set = map.get(chunk.file_path);
-      if (!set) {
-        set = new Set<number>();
-        map.set(chunk.file_path, set);
+    if (chunk.file_hunk_line_numbers && chunk.file_hunk_line_numbers.size > 0) {
+      for (const [filePath, lines] of chunk.file_hunk_line_numbers.entries()) {
+        let set = map.get(filePath);
+        if (!set) {
+          set = new Set<number>();
+          map.set(filePath, set);
+        }
+        for (const line of lines) {
+          set.add(line);
+        }
       }
-      for (const line of lines) {
-        set.add(line);
+    } else {
+      const lines = chunk.hunk_line_numbers || chunk.line_numbers;
+      if (lines && lines.size > 0 && chunk.file_path) {
+        let set = map.get(chunk.file_path);
+        if (!set) {
+          set = new Set<number>();
+          map.set(chunk.file_path, set);
+        }
+        for (const line of lines) {
+          set.add(line);
+        }
       }
     }
   }
