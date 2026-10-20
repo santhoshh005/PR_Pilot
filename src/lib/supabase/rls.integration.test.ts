@@ -392,7 +392,7 @@ runOrSkip("Live Supabase Row Level Security (RLS) Integration Tests", () => {
       .eq("id", userAId);
     expect(profsErr).toBeNull();
     expect(profs).toEqual([]);
-  });
+  }, 30000);
 
   it("user B cannot update user A's repo_settings", async () => {
     const { data: updateRes, error: updateErr } = await clientB
