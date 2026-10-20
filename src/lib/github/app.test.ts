@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getInstallationOctokit } from "./app";
+import { getInstallationOctokit, getAppOctokit } from "./app";
 import { Octokit } from "@octokit/rest";
 import { createAppAuth } from "@octokit/auth-app";
 
@@ -84,5 +84,46 @@ describe("getInstallationOctokit", () => {
       const msg = err instanceof Error ? err.message : String(err);
       expect(msg).not.toContain("SUPER_SECRET_VALUE");
     }
+  });
+});
+
+describe("getAppOctokit", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("throws if GITHUB_APP_ID is missing", () => {
+    delete process.env.GITHUB_APP_ID;
+    process.env.GITHUB_APP_PRIVATE_KEY = "dummy";
+    expect(() => getAppOctokit()).toThrowError(/GITHUB_APP_ID/);
+  });
+
+  it("throws if private key is missing", () => {
+    process.env.GITHUB_APP_ID = "123";
+    delete process.env.GITHUB_APP_PRIVATE_KEY;
+    delete process.env.GITHUB_PRIVATE_KEY;
+    expect(() => getAppOctokit()).toThrowError(/GITHUB_APP_PRIVATE_KEY/);
+  });
+
+  it("creates app-level Octokit without installationId", () => {
+    process.env.GITHUB_APP_ID = "123456";
+    process.env.GITHUB_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nKEY\\n-----END RSA PRIVATE KEY-----";
+
+    const octokit = getAppOctokit();
+    expect(octokit).toBeDefined();
+    expect(Octokit).toHaveBeenCalledWith({
+      authStrategy: createAppAuth,
+      auth: {
+        appId: "123456",
+        privateKey: "-----BEGIN RSA PRIVATE KEY-----\nKEY\n-----END RSA PRIVATE KEY-----",
+      },
+    });
   });
 });
