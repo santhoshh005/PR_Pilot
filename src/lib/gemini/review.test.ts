@@ -263,7 +263,7 @@ describe("reviewChunk - with mocked Gemini API", () => {
 });
 
 describe("Gemini Live Smoke Test", () => {
-  it("makes a single real API call when GEMINI_API_KEY is available (or skips if absent)", async () => {
+  it("makes a single real API call when GEMINI_API_KEY is available (or skips if absent)", async (ctx) => {
     let apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       const envPath = path.resolve(process.cwd(), ".env.local");
@@ -281,6 +281,7 @@ describe("Gemini Live Smoke Test", () => {
 
     if (!apiKey) {
       console.info("[SMOKE TEST] Skipping live Gemini API smoke test: GEMINI_API_KEY is not configured.");
+      ctx.skip();
       return;
     }
 
@@ -293,25 +294,18 @@ describe("Gemini Live Smoke Test", () => {
       const response = await client.models.generateContent({
         model: CONFIG.GEMINI_MODEL,
         contents: "Reply with the single word: OK",
-        config: {
-          abortSignal: AbortSignal.timeout(20000),
-        },
       });
 
       expect(response.text).toBeDefined();
+      expect(response.text?.length).toBeGreaterThan(0);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (
-        msg.includes("503") ||
-        msg.includes("high demand") ||
-        msg.includes("429") ||
-        msg.includes("aborted") ||
-        msg.includes("timeout")
-      ) {
-        console.info("[SMOKE TEST] Live Gemini API reached (transient queue/rate limit warning):", msg);
+      if (msg.includes("503") || msg.includes("high demand") || msg.includes("429")) {
+        console.info(`[SMOKE TEST] Skipping live Gemini API smoke test (service unavailable / rate limited): ${msg}`);
+        ctx.skip();
         return;
       }
       throw err;
     }
-  }, 30000);
+  }, 120000);
 });
