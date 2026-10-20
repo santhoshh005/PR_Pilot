@@ -19,10 +19,9 @@ Navigate to GitHub: **Settings > Developer Settings > GitHub Apps > New GitHub A
   ```
   Paste this string into the GitHub App settings and save it securely for your `.env.local` / Vercel environment variables as `GITHUB_WEBHOOK_SECRET`.
 - [ ] **[YOU]** **Repository Permissions** (request the exact permissions below and no more):
-  - **Pull requests**: `Read & write` (required to read diffs, comment on PRs, and submit review summaries).
-  - **Contents**: `Read-only` (required to inspect repo structure if needed).
-  - **Metadata**: `Read-only` (automatically assigned by GitHub).
-  - *All other permissions*: Leave as `No access`.
+  - **Pull requests**: `Read & write` — Needed to fetch PR diffs, check existing reviews, and post/update review comments and summaries.
+  - **Metadata**: `Read-only` — Mandatory GitHub default for all GitHub Apps to access basic repository metadata.
+  - *All other permissions* (including **Contents**): Leave as `No access` (diffs are fetched via the Pull Requests API; repo contents access is not needed).
 - [ ] **[YOU]** **Subscribe to Events**:
   - Check `Pull request` (handles `opened`, `synchronize`, `reopened`).
 - [ ] **[YOU]** **Where can this GitHub App be installed?**: Select `Only on this account` (for personal use) or `Any account` if testing across multiple accounts.

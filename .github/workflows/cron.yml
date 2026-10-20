@@ -12,6 +12,7 @@ jobs:
   process-reviews:
     name: Process Incomplete & Stale Reviews
     runs-on: ubuntu-latest
+    if: ${{ vars.APP_URL != '' }}
     steps:
       - name: Call Cron Review Processor
         run: |
