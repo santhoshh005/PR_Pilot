@@ -8,6 +8,7 @@ import {
   Repo,
   RepoSettings,
   ReviewJob,
+  ReviewJobStatus,
 } from "@/types";
 import { getInstallationOctokit } from "@/lib/github/app";
 import { fetchDiff, parseDiff, ParsedDiffChunk } from "@/lib/github/diff-parser";
@@ -18,6 +19,7 @@ import {
 } from "@/lib/gemini/review";
 import { mergeChunkResults } from "@/lib/review/merger";
 import { createServiceClient } from "@/lib/supabase/service";
+import { postReviewToGitHub, PostReviewResult } from "@/lib/review/poster";
 
 const DEFAULT_IGNORED_PATTERNS = [
   "package-lock.json",
@@ -119,7 +121,7 @@ async function runReviewPipeline(
 
   await finalizeReviewJob(
     supabase,
-    job,
+    context,
     startTime,
     chunks,
     executionResults,
@@ -491,7 +493,7 @@ async function incrementUsage(supabase: SupabaseClient): Promise<void> {
 
 async function finalizeReviewJob(
   supabase: SupabaseClient,
-  job: ReviewJob,
+  context: JobContext,
   startTime: number,
   chunks: ParsedDiffChunk[],
   results: ChunkExecutionResult[],
@@ -505,25 +507,25 @@ async function finalizeReviewJob(
   await supabase
     .from("review_jobs")
     .update({ completed_chunks: completed.length })
-    .eq("id", job.id);
+    .eq("id", context.job.id);
 
   if (deadlineHit) {
-    await handlePartialReview(supabase, job, startTime, chunks, completed);
+    await handlePartialReview(supabase, context, startTime, chunks, completed);
     return;
   }
 
   const anyFailed = results.some((r) => r.status !== "completed");
   if (anyFailed) {
-    await handleJobRetryOrFailure(supabase, job);
+    await handleJobRetryOrFailure(supabase, context.job);
     return;
   }
 
-  await handleCompletedReview(supabase, job, startTime, completed);
+  await handleCompletedReview(supabase, context, startTime, chunks, completed);
 }
 
 async function handlePartialReview(
   supabase: SupabaseClient,
-  job: ReviewJob,
+  context: JobContext,
   startTime: number,
   chunks: ParsedDiffChunk[],
   completed: Array<ChunkExecutionResult & { result: ChunkReviewResult }>
@@ -538,14 +540,30 @@ async function handlePartialReview(
     { unreviewedFiles: unreviewed }
   );
 
-  await saveReviewRecord(supabase, job, startTime, merged);
+  const postResult = await postReviewSafely(
+    context,
+    chunks,
+    merged,
+    startTime,
+    "partial",
+    unreviewed
+  );
+
+  await saveReviewRecord(
+    supabase,
+    context.job,
+    startTime,
+    merged,
+    postResult?.githubReviewId ?? null
+  );
+
   await supabase
     .from("review_jobs")
     .update({
       status: "partial",
       error_message: "Execution timeout limit reached; partial review saved",
     })
-    .eq("id", job.id);
+    .eq("id", context.job.id);
 }
 
 async function handleJobRetryOrFailure(
@@ -571,12 +589,35 @@ async function handleJobRetryOrFailure(
 
 async function handleCompletedReview(
   supabase: SupabaseClient,
-  job: ReviewJob,
+  context: JobContext,
   startTime: number,
+  chunks: ParsedDiffChunk[],
   completed: Array<ChunkExecutionResult & { result: ChunkReviewResult }>
 ): Promise<void> {
   const merged = mergeChunkResults(completed.map((c) => c.result));
-  await saveReviewRecord(supabase, job, startTime, merged);
+  const postResult = await postReviewSafely(
+    context,
+    chunks,
+    merged,
+    startTime,
+    "completed"
+  );
+
+  if (postResult?.skippedClosedPr) {
+    await supabase
+      .from("review_jobs")
+      .update({ status: "skipped" })
+      .eq("id", context.job.id);
+    return;
+  }
+
+  await saveReviewRecord(
+    supabase,
+    context.job,
+    startTime,
+    merged,
+    postResult?.githubReviewId ?? null
+  );
 
   await supabase
     .from("review_jobs")
@@ -584,14 +625,66 @@ async function handleCompletedReview(
       status: "completed",
       completed_at: new Date().toISOString(),
     })
-    .eq("id", job.id);
+    .eq("id", context.job.id);
+}
+
+async function postReviewSafely(
+  context: JobContext,
+  chunks: ParsedDiffChunk[],
+  merged: FullReviewResult,
+  startTime: number,
+  jobStatus: ReviewJobStatus | "partial" | "deferred",
+  unreviewedFiles?: string[]
+): Promise<PostReviewResult | null> {
+  try {
+    const octokit = getInstallationOctokit(context.installation.installation_id);
+    const validLinesByFile = collectValidLines(chunks);
+    const durationMs = Date.now() - startTime;
+
+    return await postReviewToGitHub({
+      octokit,
+      owner: context.repo.owner,
+      repo: context.repo.name,
+      repoId: context.repo.id,
+      prNumber: context.job.pr_number,
+      commitSha: context.job.head_sha,
+      fullReview: merged,
+      reviewDurationMs: durationMs,
+      chunkCount: chunks.length,
+      validLineNumbersByFile: validLinesByFile,
+      jobStatus,
+      unreviewedFiles,
+    });
+  } catch (err: unknown) {
+    console.error("[PROCESS_REVIEW] Failed to post review to GitHub:", err);
+    return null;
+  }
+}
+
+function collectValidLines(chunks: ParsedDiffChunk[]): Map<string, Set<number>> {
+  const map = new Map<string, Set<number>>();
+  for (const chunk of chunks) {
+    const lines = chunk.hunk_line_numbers || chunk.line_numbers;
+    if (lines && lines.size > 0) {
+      let set = map.get(chunk.file_path);
+      if (!set) {
+        set = new Set<number>();
+        map.set(chunk.file_path, set);
+      }
+      for (const line of lines) {
+        set.add(line);
+      }
+    }
+  }
+  return map;
 }
 
 async function saveReviewRecord(
   supabase: SupabaseClient,
   job: ReviewJob,
   startTime: number,
-  merged: FullReviewResult
+  merged: FullReviewResult,
+  githubReviewId: number | null = null
 ): Promise<void> {
   const durationMs = Date.now() - startTime;
   const { data: review } = await supabase
@@ -608,6 +701,7 @@ async function saveReviewRecord(
       severity_counts: merged.severity_counts,
       inline_comment_count: merged.comments.length,
       review_duration_ms: durationMs,
+      github_review_id: githubReviewId,
     })
     .select("id")
     .single();

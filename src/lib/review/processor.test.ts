@@ -215,7 +215,15 @@ describe("Review Processor / Orchestrator", () => {
     vi.spyOn(githubApp, "getInstallationOctokit").mockReturnValue({
       rest: {
         pulls: {
-          get: vi.fn().mockResolvedValue({ data: "diff --git a/file.ts b/file.ts\n+line" }),
+          get: vi.fn().mockImplementation((params: any) => {
+            if (params?.mediaType?.format === "diff") {
+              return Promise.resolve({ data: "diff --git a/file.ts b/file.ts\n+line" });
+            }
+            return Promise.resolve({ data: { state: "open", merged: false } });
+          }),
+          listReviews: vi.fn().mockResolvedValue({ data: [] }),
+          createReview: vi.fn().mockResolvedValue({ data: { id: 778899 } }),
+          updateReview: vi.fn().mockResolvedValue({ data: { id: 778899 } }),
         },
       },
     } as any);
@@ -230,6 +238,7 @@ describe("Review Processor / Orchestrator", () => {
         file_path: "file.ts",
         content: "@@ -1 +1,2 @@\n context\n+new line\n",
         token_estimate: 20,
+        hunk_line_numbers: new Set([2]),
       },
     ] as any);
   });
@@ -260,8 +269,38 @@ describe("Review Processor / Orchestrator", () => {
 
     expect(mockDb.reviews.length).toBe(1);
     expect(mockDb.reviews[0].risk_score).toBe(10);
+    expect(mockDb.reviews[0].github_review_id).toBe(778899);
     expect(mockDb.review_comments.length).toBe(1);
     expect(mockDb.review_comments[0].title).toBe("Check edge cases");
+  });
+
+  it("closed or merged PR: skips review posting and marks job as skipped", async () => {
+    vi.spyOn(githubApp, "getInstallationOctokit").mockReturnValue({
+      rest: {
+        pulls: {
+          get: vi.fn().mockImplementation((params: any) => {
+            if (params?.mediaType?.format === "diff") {
+              return Promise.resolve({ data: "diff --git a/file.ts b/file.ts\n+line" });
+            }
+            return Promise.resolve({ data: { state: "closed", merged: false } });
+          }),
+          listReviews: vi.fn().mockResolvedValue({ data: [] }),
+          createReview: vi.fn().mockResolvedValue({ data: { id: 778899 } }),
+        },
+      },
+    } as any);
+
+    vi.spyOn(geminiReview, "reviewChunk").mockResolvedValue({
+      chunk_summary: "Safe code additions.",
+      comments: [],
+      severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+    });
+
+    await processReview(dummyJobId);
+
+    const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+    expect(job?.status).toBe("skipped");
+    expect(mockDb.reviews.length).toBe(0);
   });
 
   it("one chunk fails (others saved): saves successful chunk, marks failed chunk as error", async () => {
