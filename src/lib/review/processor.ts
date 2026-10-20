@@ -93,6 +93,8 @@ async function runReviewPipeline(
 ): Promise<void> {
   const { job, repo, installation, settings } = context;
 
+  if (await checkMaxRetriesExceeded(supabase, job)) return;
+
   await supabase
     .from("review_jobs")
     .update({ status: "processing", started_at: new Date().toISOString() })
@@ -209,6 +211,24 @@ async function loadSettings(
       updated_at: "",
     }
   );
+}
+
+async function checkMaxRetriesExceeded(
+  supabase: SupabaseClient,
+  job: ReviewJob
+): Promise<boolean> {
+  if (job.retry_count >= CONFIG.MAX_JOB_RETRIES) {
+    await supabase
+      .from("review_jobs")
+      .update({
+        status: "failed",
+        error_message: "Max retries reached",
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+    return true;
+  }
+  return false;
 }
 
 async function checkDuplicateShaReview(
@@ -580,8 +600,9 @@ async function handleJobRetryOrFailure(
     await supabase
       .from("review_jobs")
       .update({
-        status: "error",
+        status: "failed",
         error_message: "Max retries reached with unresolved chunk errors",
+        completed_at: new Date().toISOString(),
       })
       .eq("id", job.id);
   }

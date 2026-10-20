@@ -1,0 +1,27 @@
+name: Review Processor Cron
+
+on:
+  schedule:
+    # Runs every 30 minutes by default on UTC.
+    # Note: If the repository is public or you have sufficient GitHub Actions minutes,
+    # this schedule can be customized (for example to every 5 minutes: '*/5 * * * *').
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  process-reviews:
+    name: Process Incomplete & Stale Reviews
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Cron Review Processor
+        run: |
+          if [ -z "${{ vars.APP_URL }}" ]; then
+            echo "::error::APP_URL variable is not configured in repository variables."
+            exit 1
+          fi
+
+          # Trigger the review processor endpoint with secret header without printing secret values
+          curl -s -S -X POST "${{ vars.APP_URL }}/api/cron/process-reviews" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            --fail-with-body
