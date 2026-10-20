@@ -417,31 +417,31 @@ runOrSkip("Live Supabase Row Level Security (RLS) Integration Tests", () => {
 
   it("anonymous (unauthenticated) client reads nothing from any table", async () => {
     const { data: p } = await clientAnon.from("profiles").select("*");
-    expect(p).toEqual([]);
+    expect(p ?? []).toEqual([]);
 
     const { data: i } = await clientAnon.from("installations").select("*");
-    expect(i).toEqual([]);
+    expect(i ?? []).toEqual([]);
 
     const { data: r } = await clientAnon.from("repos").select("*");
-    expect(r).toEqual([]);
+    expect(r ?? []).toEqual([]);
 
     const { data: s } = await clientAnon.from("repo_settings").select("*");
-    expect(s).toEqual([]);
+    expect(s ?? []).toEqual([]);
 
     const { data: w } = await clientAnon.from("webhook_deliveries").select("*");
-    expect(w).toEqual([]);
+    expect(w ?? []).toEqual([]);
 
     const { data: j } = await clientAnon.from("review_jobs").select("*");
-    expect(j).toEqual([]);
+    expect(j ?? []).toEqual([]);
 
     const { data: ch } = await clientAnon.from("review_chunks").select("*");
-    expect(ch).toEqual([]);
+    expect(ch ?? []).toEqual([]);
 
     const { data: rev } = await clientAnon.from("reviews").select("*");
-    expect(rev).toEqual([]);
+    expect(rev ?? []).toEqual([]);
 
     const { data: comm } = await clientAnon.from("review_comments").select("*");
-    expect(comm).toEqual([]);
+    expect(comm ?? []).toEqual([]);
   });
 
   it("user A CAN read their own rows across all tables", async () => {

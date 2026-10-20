@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { createUserClient } from "@/lib/supabase/server";
+import { checkAuthRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
+  const rateLimit = await checkAuthRateLimit(request);
+  if (!rateLimit.allowed) {
+    return rateLimitResponse(rateLimit.retryAfter);
+  }
+
   try {
     const supabase = await createUserClient();
     await supabase.auth.signOut();
@@ -13,8 +19,4 @@ export async function POST(request: Request) {
     const redirectUrl = new URL("/error?error=signout_failed", request.url);
     return NextResponse.redirect(redirectUrl, { status: 303 });
   }
-}
-
-export async function GET(request: Request) {
-  return POST(request);
 }

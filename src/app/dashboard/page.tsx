@@ -7,6 +7,8 @@ import { DashboardRepo } from "@/types";
 
 export const instant = false;
 
+const MAX_DASHBOARD_REVIEWS = 1000;
+
 export default async function DashboardPage() {
   const userClient = await createUserClient();
   const {
@@ -39,7 +41,9 @@ export default async function DashboardPage() {
       const { data: reviewsData, error: reviewsError } = await userClient
         .from("reviews")
         .select("repo_id, risk_score, created_at")
-        .in("repo_id", repoIds);
+        .in("repo_id", repoIds)
+        .order("created_at", { ascending: false })
+        .limit(MAX_DASHBOARD_REVIEWS);
 
       if (reviewsError) {
         console.error("[DASHBOARD_PAGE] Failed to fetch reviews:", reviewsError.message);

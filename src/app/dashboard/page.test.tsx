@@ -7,6 +7,8 @@ let mockReposData: any[] = [];
 let mockReviewsData: any[] = [];
 let mockDbError: Error | null = null;
 const mockRedirect = vi.fn();
+const mockLimitFn = vi.fn();
+const mockOrderFn = vi.fn();
 
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => mockRedirect(url),
@@ -22,14 +24,32 @@ vi.mock("@/lib/supabase/server", () => ({
     },
     from: vi.fn((table: string) => ({
       select: vi.fn(() => ({
-        order: vi.fn(async () => {
-          if (mockDbError) return { data: null, error: mockDbError };
-          return { data: mockReposData, error: null };
+        order: vi.fn((col: string, opts?: any) => {
+          mockOrderFn(table, col, opts);
+          return {
+            limit: vi.fn(async (limitVal: number) => {
+              mockLimitFn(table, limitVal);
+              if (mockDbError) return { data: null, error: mockDbError };
+              return { data: table === "repos" ? mockReposData : mockReviewsData, error: null };
+            }),
+            then: (resolve: any) => {
+              if (mockDbError) return resolve({ data: null, error: mockDbError });
+              return resolve({ data: mockReposData, error: null });
+            },
+          };
         }),
-        in: vi.fn(async () => {
-          if (mockDbError) return { data: null, error: mockDbError };
-          return { data: mockReviewsData, error: null };
-        }),
+        in: vi.fn((col: string, values: any[]) => ({
+          order: vi.fn((col: string, opts?: any) => {
+            mockOrderFn(table, col, opts);
+            return {
+              limit: vi.fn(async (limitVal: number) => {
+                mockLimitFn(table, limitVal);
+                if (mockDbError) return { data: null, error: mockDbError };
+                return { data: mockReviewsData, error: null };
+              }),
+            };
+          }),
+        })),
         then: (resolve: any) => {
           if (mockDbError) return resolve({ data: null, error: mockDbError });
           if (table === "repos") return resolve({ data: mockReposData, error: null });
@@ -125,5 +145,24 @@ describe("Dashboard Page (RSC)", { timeout: 15000 }, () => {
     expect(screen.getByText("Unable to load repositories")).toBeDefined();
     expect(screen.queryByText(/postgres:/i)).toBeNull();
     expect(screen.queryByText(/timeout/i)).toBeNull();
+  });
+
+  it("bounds the review aggregation query with a hard cap of 1000 reviews ordered newest first", async () => {
+    mockReposData = [
+      {
+        id: "repo-1",
+        full_name: "test/repo",
+        owner: "test",
+        name: "repo",
+        is_active: true,
+        created_at: new Date().toISOString(),
+      },
+    ];
+
+    const { default: DashboardPage } = await import("./page");
+    await DashboardPage();
+
+    expect(mockOrderFn).toHaveBeenCalledWith("reviews", "created_at", { ascending: false });
+    expect(mockLimitFn).toHaveBeenCalledWith("reviews", 1000);
   });
 });
