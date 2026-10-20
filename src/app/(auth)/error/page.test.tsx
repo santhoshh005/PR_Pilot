@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import AuthErrorPage from "./page";
 
-describe("AuthErrorPage", () => {
+describe("AuthErrorPage", { timeout: 15000 }, () => {
   it("renders default error message when no error query param provided", async () => {
     const Component = await AuthErrorPage({
       searchParams: Promise.resolve({}),

@@ -64,6 +64,10 @@ const mockFrom = vi.fn((table: string) => {
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: vi.fn(() => ({
     from: mockFrom,
+    rpc: vi.fn().mockResolvedValue({
+      data: [{ allowed: true, remaining: 59, reset_at: "2026-10-20T22:00:00Z", retry_after: 0 }],
+      error: null,
+    }),
   })),
 }));
 
@@ -583,5 +587,41 @@ describe("POST /api/webhook", () => {
     const json = await res.json();
     expect(json.ok).toBe(true);
     expect(json.job_id).toBe("job-uuid-bg-err");
+  });
+
+  // --- Rate Limiting Enforcement ---
+
+  it("returns 429 with Retry-After when rate limit is exceeded", async () => {
+    const rateLimitMod = await import("@/lib/rate-limit");
+    vi.spyOn(rateLimitMod, "checkWebhookRateLimit").mockResolvedValueOnce({
+      allowed: false,
+      remaining: 0,
+      resetAt: new Date(Date.now() + 45000),
+      retryAfter: 45,
+    });
+
+    const { POST } = await import("./route");
+    const body = JSON.stringify(validPrPayload);
+    const signature = await sign(TEST_SECRET, body);
+
+    const req = new NextRequest("http://localhost:3000/api/webhook", {
+      method: "POST",
+      headers: {
+        "x-hub-signature-256": signature,
+        "x-github-delivery": "delivery-rate-limited",
+        "x-github-event": "pull_request",
+      },
+      body,
+    });
+
+    const res = await POST(req);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("45");
+    const json = await res.json();
+    expect(json).toEqual({
+      error: "rate_limited",
+      message: "Too many requests. Please try again later.",
+      status: 429,
+    });
   });
 });

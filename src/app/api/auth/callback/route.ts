@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 import { createUserClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
+import { checkAuthRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export async function GET(request: Request) {
+  const rateLimit = await checkAuthRateLimit(request);
+  if (!rateLimit.allowed) {
+    return rateLimitResponse(rateLimit.retryAfter);
+  }
+
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
   const rawNext = requestUrl.searchParams.get("next");

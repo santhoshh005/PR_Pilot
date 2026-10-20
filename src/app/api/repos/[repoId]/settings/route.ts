@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createUserClient } from "@/lib/supabase/server";
+import { checkDashboardRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { ApiError, RepoSettings } from "@/types";
 
 const ParamsSchema = z.object({
@@ -41,6 +42,11 @@ export async function GET(
         status: 401,
       };
       return NextResponse.json(errorResponse, { status: 401 });
+    }
+
+    const rateLimit = await checkDashboardRateLimit(user.id);
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.retryAfter);
     }
 
     const rawParams = await params;
@@ -140,6 +146,11 @@ export async function PATCH(
         status: 401,
       };
       return NextResponse.json(errorResponse, { status: 401 });
+    }
+
+    const rateLimit = await checkDashboardRateLimit(user.id);
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.retryAfter);
     }
 
     const rawParams = await params;

@@ -130,4 +130,27 @@ describe("GET /api/repos", () => {
     expect(r2.avg_risk_score).toBeNull();
     expect(r2.last_review_at).toBeNull();
   });
+
+  it("returns 429 with Retry-After when dashboard rate limit is exceeded", async () => {
+    const rateLimitMod = await import("@/lib/rate-limit");
+    vi.spyOn(rateLimitMod, "checkDashboardRateLimit").mockResolvedValueOnce({
+      allowed: false,
+      remaining: 0,
+      resetAt: new Date(Date.now() + 50000),
+      retryAfter: 50,
+    });
+
+    const { GET } = await import("./route");
+    const req = new Request("http://localhost:3000/api/repos");
+
+    const res = await GET(req);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("50");
+    const body = await res.json();
+    expect(body).toEqual({
+      error: "rate_limited",
+      message: "Too many requests. Please try again later.",
+      status: 429,
+    });
+  });
 });

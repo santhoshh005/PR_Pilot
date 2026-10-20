@@ -247,4 +247,27 @@ describe("Auth Callback Route Handler (GET /api/auth/callback)", () => {
 
     fetchSpy.mockRestore();
   });
+
+  it("returns 429 with Retry-After when auth rate limit is exceeded", async () => {
+    const rateLimitMod = await import("@/lib/rate-limit");
+    vi.spyOn(rateLimitMod, "checkAuthRateLimit").mockResolvedValueOnce({
+      allowed: false,
+      remaining: 0,
+      resetAt: new Date(Date.now() + 60000),
+      retryAfter: 60,
+    });
+
+    const { GET } = await import("./route");
+    const req = new NextRequest("http://localhost:3000/api/auth/callback?code=some_code");
+
+    const res = await GET(req);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("60");
+    const json = await res.json();
+    expect(json).toEqual({
+      error: "rate_limited",
+      message: "Too many requests. Please try again later.",
+      status: 429,
+    });
+  });
 });

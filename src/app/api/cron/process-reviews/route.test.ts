@@ -492,6 +492,31 @@ describe("POST /api/cron/process-reviews", () => {
       expect(body.processed).toBe(1);
       expect(body.jobs).toHaveLength(1);
     });
+
+    it("returns 429 with Retry-After when cron rate limit is exceeded", async () => {
+      const rateLimitMod = await import("@/lib/rate-limit");
+      vi.spyOn(rateLimitMod, "checkCronRateLimit").mockResolvedValueOnce({
+        allowed: false,
+        remaining: 0,
+        resetAt: new Date(Date.now() + 60000),
+        retryAfter: 60,
+      });
+
+      const req = new Request("http://localhost:3000/api/cron/process-reviews", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TEST_SECRET}` },
+      });
+
+      const res = await POST(req);
+      expect(res.status).toBe(429);
+      expect(res.headers.get("Retry-After")).toBe("60");
+      const body = await res.json();
+      expect(body).toEqual({
+        error: "rate_limited",
+        message: "Too many requests. Please try again later.",
+        status: 429,
+      });
+    });
   });
 });
 
@@ -548,6 +573,7 @@ describe("Live parallel claims integration (Supabase RPC)", () => {
       const { data: profiles } = await client1
         .from("profiles")
         .select("id")
+        .order("created_at", { ascending: true })
         .limit(1);
       expect(profiles && profiles.length > 0).toBe(true);
       const profileId = profiles![0].id;

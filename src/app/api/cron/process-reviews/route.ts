@@ -4,6 +4,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { CONFIG, ReviewJob } from "@/types";
 import { createServiceClient } from "@/lib/supabase/service";
 import { processReview } from "@/lib/review/processor";
+import { checkCronRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export const maxDuration = 300;
 
@@ -16,9 +17,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
+    const rateLimit = await checkCronRateLimit(request);
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.retryAfter);
+    }
+
     const supabase = createServiceClient();
     try {
       await cleanupOldWebhookDeliveries(supabase);
+      await supabase.rpc("cleanup_expired_rate_limits", { p_older_than_seconds: 3600 });
     } catch {
       console.error("[CRON_PROCESS_REVIEWS] Webhook delivery cleanup failed, continuing job processing");
     }

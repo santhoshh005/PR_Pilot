@@ -3,6 +3,7 @@ import { waitUntil } from "@vercel/functions";
 import { verifyWebhookSignature } from "@/lib/github/webhooks";
 import { processReview } from "@/lib/review/processor";
 import { createServiceClient } from "@/lib/supabase/service";
+import { checkWebhookRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { WebhookPullRequestSchema } from "@/types";
 import type { ApiError } from "@/types";
 
@@ -13,6 +14,11 @@ const HANDLED_PR_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
 export async function POST(request: Request) {
   try {
+    const rateLimit = await checkWebhookRateLimit(request);
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.retryAfter);
+    }
+
     // Check Content-Length header if present to fail fast on oversized requests
     const contentLength = request.headers.get("content-length");
     if (contentLength && parseInt(contentLength, 10) > MAX_BODY_BYTES) {

@@ -87,6 +87,7 @@ runOrSkip("Live Dashboard API Endpoints Integration Test (Cross-User Isolation)"
     const { data: realProfiles } = await serviceClient
       .from("profiles")
       .select("id")
+      .order("created_at", { ascending: true })
       .limit(1);
     expect(realProfiles && realProfiles.length > 0).toBe(true);
     realProfileId = realProfiles![0].id;

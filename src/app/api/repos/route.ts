@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createUserClient } from "@/lib/supabase/server";
+import { checkDashboardRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { DashboardRepo, ApiError } from "@/types";
 
 export async function GET(request: Request) {
@@ -17,6 +18,11 @@ export async function GET(request: Request) {
         status: 401,
       };
       return NextResponse.json(errorResponse, { status: 401 });
+    }
+
+    const rateLimit = await checkDashboardRateLimit(user.id);
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.retryAfter);
     }
 
     // Query user's repos via RLS

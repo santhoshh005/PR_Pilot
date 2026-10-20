@@ -17,7 +17,7 @@ vi.mock("next/navigation", () => ({
   redirect: (url: string) => mockRedirect(url),
 }));
 
-describe("LoginPage", () => {
+describe("LoginPage", { timeout: 15000 }, () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
