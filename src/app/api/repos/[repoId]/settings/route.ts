@@ -2,13 +2,14 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createUserClient } from "@/lib/supabase/server";
 import { checkDashboardRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { STRICTNESS_OPTIONS } from "@/lib/constants";
 import { ApiError, RepoSettings } from "@/types";
 
 const ParamsSchema = z.object({
   repoId: z.string().uuid("Invalid repository ID"),
 });
 
-const PatchSettingsSchema = z
+export const PatchSettingsSchema = z
   .object({
     ignored_paths: z
       .array(
@@ -16,7 +17,7 @@ const PatchSettingsSchema = z
       )
       .max(100, "Maximum 100 ignored path patterns allowed")
       .optional(),
-    strictness: z.enum(["relaxed", "balanced", "strict"]).optional(),
+    strictness: z.enum(STRICTNESS_OPTIONS).optional(),
     custom_instructions: z
       .string()
       .max(2000, "Custom instructions must not exceed 2000 characters")

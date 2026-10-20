@@ -118,6 +118,41 @@ describe("SettingsForm", () => {
     });
   });
 
+  it("submits relaxed strictness successfully", async () => {
+    (global.fetch as any).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          strictness: "relaxed",
+          custom_instructions: "Focus on memory leaks and SQL injection.",
+          ignored_paths: ["*.md", "docs/**"],
+        },
+      }),
+    });
+
+    render(<SettingsForm repoId="repo-123" initialSettings={defaultSettings} />);
+
+    const strictnessSelect = screen.getByLabelText(/review strictness/i);
+    fireEvent.change(strictnessSelect, { target: { value: "relaxed" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith("/api/repos/repo-123/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strictness: "relaxed",
+          custom_instructions: "Focus on memory leaks and SQL injection.",
+          ignored_paths: ["*.md", "docs/**"],
+        }),
+      });
+      expect(screen.getByText(/settings saved successfully/i)).toBeDefined();
+    });
+  });
+
   it("handles 429 rate-limited response cleanly without raw API text", async () => {
     (global.fetch as any).mockResolvedValueOnce({
       ok: false,

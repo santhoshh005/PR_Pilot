@@ -2,9 +2,10 @@
 
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { STRICTNESS_OPTIONS, Strictness } from "@/lib/constants";
 
 export interface RepoSettingsData {
-  strictness: "lenient" | "balanced" | "strict";
+  strictness: Strictness;
   custom_instructions: string;
   ignored_paths: string[];
 }
@@ -15,7 +16,7 @@ interface SettingsFormProps {
 }
 
 export function SettingsForm({ repoId, initialSettings }: SettingsFormProps) {
-  const [strictness, setStrictness] = useState<"lenient" | "balanced" | "strict">(
+  const [strictness, setStrictness] = useState<Strictness>(
     initialSettings.strictness || "balanced"
   );
   const [customInstructions, setCustomInstructions] = useState<string>(
@@ -41,7 +42,7 @@ export function SettingsForm({ repoId, initialSettings }: SettingsFormProps) {
     const newErrors: typeof errors = {};
 
     // 1. Strictness validation
-    if (!["lenient", "balanced", "strict"].includes(strictness)) {
+    if (!STRICTNESS_OPTIONS.includes(strictness)) {
       newErrors.strictness = "Invalid strictness level selected.";
     }
 
@@ -165,15 +166,21 @@ export function SettingsForm({ repoId, initialSettings }: SettingsFormProps) {
           id="strictness"
           value={strictness}
           onChange={(e) =>
-            setStrictness(e.target.value as "lenient" | "balanced" | "strict")
+            setStrictness(e.target.value as Strictness)
           }
           aria-invalid={!!errors.strictness}
           aria-describedby={errors.strictness ? "strictness-error" : undefined}
           className="w-full sm:w-64 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:focus:ring-zinc-600"
         >
-          <option value="lenient">Lenient (Critical bugs & security only)</option>
-          <option value="balanced">Balanced (Recommended)</option>
-          <option value="strict">Strict (Thorough analysis & style tips)</option>
+          {STRICTNESS_OPTIONS.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt === "relaxed"
+                ? "Relaxed (Critical bugs & security only)"
+                : opt === "balanced"
+                ? "Balanced (Recommended)"
+                : "Strict (Thorough analysis & style tips)"}
+            </option>
+          ))}
         </select>
         {errors.strictness && (
           <p id="strictness-error" className="text-xs text-rose-600 dark:text-rose-400">

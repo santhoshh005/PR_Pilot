@@ -362,10 +362,11 @@ runOrSkip("Live Dashboard API Endpoints Integration Test (Cross-User Isolation)"
     expect(bodySettings.settings.custom_instructions).toBe("Live initial instructions");
   }, 30000);
 
-  it("User A CAN update (PATCH) their own repository settings", async () => {
+  it("User A CAN update (PATCH) their own repository settings with each allowed strictness value", async () => {
     activeUserClient = clientA;
 
-    const reqPatch = new Request(
+    // 1. Test "strict"
+    const reqPatchStrict = new Request(
       `http://localhost:3000/api/repos/${testRepoAId}/settings`,
       {
         method: "PATCH",
@@ -377,24 +378,60 @@ runOrSkip("Live Dashboard API Endpoints Integration Test (Cross-User Isolation)"
       }
     );
 
-    const resPatch = await patchSettings(reqPatch, {
+    const resStrict = await patchSettings(reqPatchStrict, {
       params: Promise.resolve({ repoId: testRepoAId }),
     });
-    expect(resPatch.status).toBe(200);
-    const bodyPatch = await resPatch.json();
-    expect(bodyPatch.settings.strictness).toBe("strict");
-    expect(bodyPatch.settings.custom_instructions).toBe(
+    expect(resStrict.status).toBe(200);
+    const bodyStrict = await resStrict.json();
+    expect(bodyStrict.settings.strictness).toBe("strict");
+    expect(bodyStrict.settings.custom_instructions).toBe(
       "Live updated instructions by User A"
     );
-    expect(bodyPatch.settings.ignored_paths).toEqual(["docs/**", "*.tmp"]);
+    expect(bodyStrict.settings.ignored_paths).toEqual(["docs/**", "*.tmp"]);
 
-    // Verify in database
+    // 2. Test "relaxed"
+    const reqPatchRelaxed = new Request(
+      `http://localhost:3000/api/repos/${testRepoAId}/settings`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          strictness: "relaxed",
+        }),
+      }
+    );
+
+    const resRelaxed = await patchSettings(reqPatchRelaxed, {
+      params: Promise.resolve({ repoId: testRepoAId }),
+    });
+    expect(resRelaxed.status).toBe(200);
+    const bodyRelaxed = await resRelaxed.json();
+    expect(bodyRelaxed.settings.strictness).toBe("relaxed");
+
+    // 3. Test "balanced"
+    const reqPatchBalanced = new Request(
+      `http://localhost:3000/api/repos/${testRepoAId}/settings`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          strictness: "balanced",
+        }),
+      }
+    );
+
+    const resBalanced = await patchSettings(reqPatchBalanced, {
+      params: Promise.resolve({ repoId: testRepoAId }),
+    });
+    expect(resBalanced.status).toBe(200);
+    const bodyBalanced = await resBalanced.json();
+    expect(bodyBalanced.settings.strictness).toBe("balanced");
+
+    // Verify final state in database
     const { data: dbCheck } = await serviceClient
       .from("repo_settings")
       .select("strictness, custom_instructions, ignored_paths")
       .eq("id", testSettingsAId)
       .single();
-    expect(dbCheck?.strictness).toBe("strict");
+    expect(dbCheck?.strictness).toBe("balanced");
     expect(dbCheck?.custom_instructions).toBe("Live updated instructions by User A");
     expect(dbCheck?.ignored_paths).toEqual(["docs/**", "*.tmp"]);
   }, 30000);

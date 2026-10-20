@@ -416,32 +416,58 @@ runOrSkip("Live Supabase Row Level Security (RLS) Integration Tests", () => {
   });
 
   it("anonymous (unauthenticated) client reads nothing from any table", async () => {
-    const { data: p } = await clientAnon.from("profiles").select("*");
-    expect(p ?? []).toEqual([]);
+    const { data: p, error: pErr } = await clientAnon.from("profiles").select("*");
+    expect(p == null || p.length === 0).toBe(true);
+    if (pErr) expect(pErr.code === "42501" || pErr.message.includes("permission denied")).toBe(true);
 
-    const { data: i } = await clientAnon.from("installations").select("*");
-    expect(i ?? []).toEqual([]);
+    const { data: i, error: iErr } = await clientAnon.from("installations").select("*");
+    expect(i == null || i.length === 0).toBe(true);
+    if (iErr) expect(iErr.code === "42501" || iErr.message.includes("permission denied")).toBe(true);
 
-    const { data: r } = await clientAnon.from("repos").select("*");
-    expect(r ?? []).toEqual([]);
+    const { data: r, error: rErr } = await clientAnon.from("repos").select("*");
+    expect(r == null || r.length === 0).toBe(true);
+    if (rErr) expect(rErr.code === "42501" || rErr.message.includes("permission denied")).toBe(true);
 
-    const { data: s } = await clientAnon.from("repo_settings").select("*");
-    expect(s ?? []).toEqual([]);
+    const { data: s, error: sErr } = await clientAnon.from("repo_settings").select("*");
+    expect(s == null || s.length === 0).toBe(true);
+    if (sErr) expect(sErr.code === "42501" || sErr.message.includes("permission denied")).toBe(true);
 
-    const { data: w } = await clientAnon.from("webhook_deliveries").select("*");
-    expect(w ?? []).toEqual([]);
+    const { data: w, error: wErr } = await clientAnon.from("webhook_deliveries").select("*");
+    expect(w == null || w.length === 0).toBe(true);
+    if (wErr) expect(wErr.code === "42501" || wErr.message.includes("permission denied")).toBe(true);
 
-    const { data: j } = await clientAnon.from("review_jobs").select("*");
-    expect(j ?? []).toEqual([]);
+    const { data: j, error: jErr } = await clientAnon.from("review_jobs").select("*");
+    expect(j == null || j.length === 0).toBe(true);
+    if (jErr) expect(jErr.code === "42501" || jErr.message.includes("permission denied")).toBe(true);
 
-    const { data: ch } = await clientAnon.from("review_chunks").select("*");
-    expect(ch ?? []).toEqual([]);
+    const { data: ch, error: chErr } = await clientAnon.from("review_chunks").select("*");
+    expect(ch == null || ch.length === 0).toBe(true);
+    if (chErr) expect(chErr.code === "42501" || chErr.message.includes("permission denied")).toBe(true);
 
-    const { data: rev } = await clientAnon.from("reviews").select("*");
-    expect(rev ?? []).toEqual([]);
+    const { data: rev, error: revErr } = await clientAnon.from("reviews").select("*");
+    expect(rev == null || rev.length === 0).toBe(true);
+    if (revErr) expect(revErr.code === "42501" || revErr.message.includes("permission denied")).toBe(true);
 
-    const { data: comm } = await clientAnon.from("review_comments").select("*");
-    expect(comm ?? []).toEqual([]);
+    const { data: comm, error: commErr } = await clientAnon.from("review_comments").select("*");
+    expect(comm == null || comm.length === 0).toBe(true);
+    if (commErr) expect(commErr.code === "42501" || commErr.message.includes("permission denied")).toBe(true);
+  });
+
+  it("anonymous (unauthenticated) client cannot write to any user table", async () => {
+    const { data: insertData, error: insertErr } = await clientAnon
+      .from("profiles")
+      .insert({ id: "00000000-0000-4000-8000-000000000099", github_username: "anon_hacker" });
+    expect(insertErr).not.toBeNull();
+    expect(insertData).toBeNull();
+    expect(insertErr?.code === "42501" || insertErr?.message.includes("permission denied")).toBe(true);
+
+    const { data: updateData, error: updateErr } = await clientAnon
+      .from("repo_settings")
+      .update({ custom_instructions: "anon_hacked" })
+      .eq("repo_id", repoAId);
+    expect(updateErr).not.toBeNull();
+    expect(updateData).toBeNull();
+    expect(updateErr?.code === "42501" || updateErr?.message.includes("permission denied")).toBe(true);
   });
 
   it("user A CAN read their own rows across all tables", async () => {
