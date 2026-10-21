@@ -361,13 +361,14 @@ runOrSkip("Live Supabase Row Level Security (RLS) Integration Tests", () => {
     expect(jobsErr).toBeNull();
     expect(jobs).toEqual([]);
 
-    // Review chunks: user B sees empty results
+    // Review chunks: internal table (privilege revoked from authenticated)
     const { data: chunks, error: chunksErr } = await clientB
       .from("review_chunks")
       .select("*")
       .eq("id", reviewChunkAId);
-    expect(chunksErr).toBeNull();
-    expect(chunks).toEqual([]);
+    expect(chunksErr).not.toBeNull();
+    expect(chunksErr?.code).toBe("42501");
+    expect(chunks).toBeNull();
 
     // Reviews: user B sees empty results
     const { data: reviews, error: revsErr } = await clientB
@@ -513,13 +514,21 @@ runOrSkip("Live Supabase Row Level Security (RLS) Integration Tests", () => {
     expect(jobErr).toBeNull();
     expect(jobs?.length).toBe(1);
 
-    // Review Chunks
+    // Review Chunks: internal table (table privilege revoked from authenticated)
     const { data: chunks, error: chunkErr } = await clientA
       .from("review_chunks")
       .select("*")
       .eq("id", reviewChunkAId);
-    expect(chunkErr).toBeNull();
-    expect(chunks?.length).toBe(1);
+    expect(chunkErr).not.toBeNull();
+    expect(chunks).toBeNull();
+
+    // Service role CAN access internal review_chunks
+    const { data: serviceChunks, error: serviceChunkErr } = await serviceClient
+      .from("review_chunks")
+      .select("*")
+      .eq("id", reviewChunkAId);
+    expect(serviceChunkErr).toBeNull();
+    expect(serviceChunks?.length).toBe(1);
 
     // Reviews
     const { data: reviews, error: revErr } = await clientA

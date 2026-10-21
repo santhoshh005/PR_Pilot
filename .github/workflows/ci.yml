@@ -27,16 +27,16 @@ jobs:
       CI: "true"
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4.1.0
+        uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d # v4.1.0
         with:
           version: 12.14.0
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4.2.0
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
         with:
           node-version: 24
           cache: "pnpm"
@@ -60,21 +60,21 @@ jobs:
     name: End-to-End Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Safe isolation: only run on push to main or manual workflow_dispatch (never on fork PRs)
-    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    # Manual trigger only: runs via workflow_dispatch to prevent failures on commits without live secrets
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: [test]
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4.1.0
+        uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d # v4.1.0
         with:
           version: 12.14.0
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4.2.0
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
         with:
           node-version: 24
           cache: "pnpm"
