@@ -43,16 +43,20 @@ export async function POST(request: Request) {
       return NextResponse.json(errorResponse, { status: 413 });
     }
 
-    // 3. Fast volumetric in-memory rate limit check before expensive operations
+    // 3. Fast volumetric in-memory rate limit check before expensive operations.
+    // Skip for 'unknown-client' so unauthenticated traffic without IP headers cannot
+    // exhaust a single shared bucket and DoS legitimate signed GitHub webhooks.
     const clientIp = getClientIp(request);
-    const inMemKey = hashKey("webhook_volumetric", clientIp);
-    const inMemCheck = checkRateLimitInMemory(
-      inMemKey,
-      RATE_LIMITS.WEBHOOK.limit * 2,
-      RATE_LIMITS.WEBHOOK.windowSeconds
-    );
-    if (!inMemCheck.allowed) {
-      return rateLimitResponse(inMemCheck.retryAfter);
+    if (clientIp !== "unknown-client") {
+      const inMemKey = hashKey("webhook_volumetric", clientIp);
+      const inMemCheck = checkRateLimitInMemory(
+        inMemKey,
+        RATE_LIMITS.WEBHOOK.limit * 2,
+        RATE_LIMITS.WEBHOOK.windowSeconds
+      );
+      if (!inMemCheck.allowed) {
+        return rateLimitResponse(inMemCheck.retryAfter);
+      }
     }
 
     // 4. Validate HMAC signature before touching the database

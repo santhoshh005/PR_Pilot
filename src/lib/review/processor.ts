@@ -306,13 +306,22 @@ async function checkDuplicateShaReview(
   return true;
 }
 
+export function getDailyLimit(): number {
+  const raw = process.env.GEMINI_DAILY_LIMIT?.trim();
+  if (!raw) return 1500;
+  const parsed = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 100_000) {
+    console.warn(`[PROCESS_REVIEW] Invalid GEMINI_DAILY_LIMIT '${raw}', falling back to default 1500`);
+    return 1500;
+  }
+  return parsed;
+}
+
 async function checkDailyBudgetExhausted(
   supabase: SupabaseClient,
   jobId: string
 ): Promise<boolean> {
-  const dailyLimit = process.env.GEMINI_DAILY_LIMIT
-    ? parseInt(process.env.GEMINI_DAILY_LIMIT, 10)
-    : 1500;
+  const dailyLimit = getDailyLimit();
 
   const today = new Date().toISOString().slice(0, 10);
   const { data: row } = await supabase
@@ -577,9 +586,7 @@ async function reserveUsage(
   supabase: SupabaseClient,
   count: number = 1
 ): Promise<boolean> {
-  const dailyLimit = process.env.GEMINI_DAILY_LIMIT
-    ? parseInt(process.env.GEMINI_DAILY_LIMIT, 10)
-    : 1500;
+  const dailyLimit = getDailyLimit();
   const today = new Date().toISOString().slice(0, 10);
 
   const { data, error } = await supabase.rpc("reserve_daily_api_usage", {

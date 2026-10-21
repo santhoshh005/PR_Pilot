@@ -189,7 +189,16 @@ This document covers all security threats specific to a GitHub App that processe
 | `SUPABASE_SERVICE_ROLE_KEY` | Vercel | **Yes** | Supabase service role (bypasses RLS) |
 | `GEMINI_API_KEY` | Vercel | **Yes** | Gemini API key |
 | `CRON_SECRET` | Vercel | **Yes** | Protects cron endpoint |
-| `NEXT_PUBLIC_APP_URL` | Vercel | No | App base URL for OAuth redirects |
+| `NEXT_PUBLIC_APP_URL` | Vercel | No | Base application URL (`http://localhost:3000` or `https://<app>.vercel.app`) for OAuth redirects and host allow-listing |
+| `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | Vercel | No | Direct URL to install the GitHub App, displayed in dashboard empty state |
+
+### OAuth Host Allow-Listing & Vercel Preview Deployments
+
+- **Redirect Host Allow-Listing**: The OAuth callback (`/api/auth/callback`) strictly constructs redirect URLs using `NEXT_PUBLIC_APP_URL` and validates that `next` paths are relative. Untrusted `Host` or `X-Forwarded-Host` request headers are ignored.
+- **Supabase Auth Redirect URL Patterns**: Supabase Auth enforces strict redirect URI allow-listing. Required patterns:
+  - `http://localhost:3000/**` (Local development)
+  - `https://<your-app>.vercel.app/**` (Production)
+- **Vercel Preview Deployments**: Dynamic branch preview URLs (e.g. `https://prpilot-git-*.vercel.app`) are **not** accepted for OAuth by default. If preview authentication is required, account-scoped patterns (e.g. `https://*-<your-team-or-account-slug>.vercel.app/**`) must be added to Supabase Auth Redirect URLs, and `NEXT_PUBLIC_APP_URL` must be set to the corresponding preview URL; never use an open `https://*.vercel.app/**` pattern. Otherwise OAuth redirects strictly to the configured production `NEXT_PUBLIC_APP_URL`.
 
 ---
 

@@ -88,7 +88,10 @@ Every environment variable defined in `.env.local.example` must be populated. Us
 - [ ] **[YOU]** **Supabase Auth URL Configuration**:
   - Open Supabase Dashboard > Authentication > URL Configuration.
   - Set **Site URL** to `https://<your-app>.vercel.app`.
-  - Under **Redirect URLs**, add `https://<your-app>.vercel.app/api/auth/callback`.
+  - Under **Redirect URLs**, add the required allow-list patterns:
+    - `http://localhost:3000/**`
+    - `https://<your-app>.vercel.app/**`
+  - *Note on Vercel Preview Deployments*: Preview branch URLs (e.g. `https://prpilot-git-*.vercel.app`) are **not** accepted for OAuth sign-in unless an account-scoped pattern (e.g. `https://*-<your-team-or-account-slug>.vercel.app/**`) is added to Supabase Auth Redirect URLs, and `NEXT_PUBLIC_APP_URL` is set on the preview environment. Never use a wide open `https://*.vercel.app/**` pattern.
 - [ ] **[YOU]** **GitHub App Webhook & Callback Update**:
   - Open GitHub App Settings.
   - Update **Webhook URL** to `https://<your-app>.vercel.app/api/webhook`.

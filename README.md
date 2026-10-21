@@ -145,12 +145,15 @@ Deployment is handled natively via Vercel's GitHub integration on every push to 
    - **Root Directory**: `./`
    - **Build Command**: `pnpm build`
    - **Install Command**: `pnpm install`
-3. Add all 9 environment variables listed above under **Project Settings > Environment Variables** for Production and Preview environments.
+3. Add the 10 environment variables listed above under **Project Settings > Environment Variables** for Production and Preview environments.
 4. Deploy the project and copy your production domain.
 5. In Supabase Dashboard:
    - Navigate to **Authentication > URL Configuration**.
    - Set **Site URL** to `https://<your-app>.vercel.app`.
-   - Add `https://<your-app>.vercel.app/api/auth/callback` to **Redirect URLs**.
+   - Under **Redirect URLs**, add the required allow-list patterns:
+     - `http://localhost:3000/**` (Local development)
+     - `https://<your-app>.vercel.app/**` (Production)
+   - **Vercel Preview Deployments**: Dynamic branch preview URLs (e.g. `https://prpilot-git-*.vercel.app`) are **not** accepted for OAuth unless an account-scoped pattern (such as `https://*-<your-team-or-account-slug>.vercel.app/**`) is explicitly added to Supabase Auth Redirect URLs, and `NEXT_PUBLIC_APP_URL` is set accordingly (never use un-scoped `https://*.vercel.app/**`). Otherwise, sign-in attempts on preview deployments will be rejected by Supabase Auth or redirected back to the configured production `NEXT_PUBLIC_APP_URL`.
 
 ---
 

@@ -836,5 +836,42 @@ describe("Review Processor / Orchestrator", () => {
       expect(partialJob.status).toBe("completed");
       expect(partialJob.completed_chunks).toBe(2);
     });
+
+    it("validates GEMINI_DAILY_LIMIT as a positive bounded integer", async () => {
+      const { getDailyLimit } = await import("./processor");
+
+      const orig = process.env.GEMINI_DAILY_LIMIT;
+      try {
+        delete process.env.GEMINI_DAILY_LIMIT;
+        expect(getDailyLimit()).toBe(1500);
+
+        process.env.GEMINI_DAILY_LIMIT = "2000";
+        expect(getDailyLimit()).toBe(2000);
+
+        process.env.GEMINI_DAILY_LIMIT = "invalid-number";
+        expect(getDailyLimit()).toBe(1500);
+
+        process.env.GEMINI_DAILY_LIMIT = "1e3";
+        expect(getDailyLimit()).toBe(1500);
+
+        process.env.GEMINI_DAILY_LIMIT = "500abc";
+        expect(getDailyLimit()).toBe(1500);
+
+        process.env.GEMINI_DAILY_LIMIT = "-50";
+        expect(getDailyLimit()).toBe(1500);
+
+        process.env.GEMINI_DAILY_LIMIT = "0";
+        expect(getDailyLimit()).toBe(1500);
+
+        process.env.GEMINI_DAILY_LIMIT = "9999999"; // exceeds bound 100,000
+        expect(getDailyLimit()).toBe(1500);
+      } finally {
+        if (orig !== undefined) {
+          process.env.GEMINI_DAILY_LIMIT = orig;
+        } else {
+          delete process.env.GEMINI_DAILY_LIMIT;
+        }
+      }
+    });
   });
 });

@@ -638,6 +638,41 @@ describe("POST /api/webhook", { timeout: 15000 }, () => {
 
   // --- Rate Limiting Enforcement ---
 
+  it("skips volumetric pre-signature in-memory limit when client IP is unknown-client so legitimate webhooks are not DoSed", async () => {
+    const rateLimitMod = await import("@/lib/rate-limit");
+    vi.spyOn(rateLimitMod, "getClientIp").mockReturnValue("unknown-client");
+    const inMemSpy = vi.spyOn(rateLimitMod, "checkRateLimitInMemory");
+
+    mockWebhookDeliveriesInsert.mockResolvedValueOnce({ error: null });
+    mockReposSingle.mockResolvedValueOnce({
+      data: { id: "repo-uuid-99", is_active: true },
+      error: null,
+    });
+    mockReviewJobsSingle.mockResolvedValueOnce({
+      data: { id: "job-uuid-unknown-ip" },
+      error: null,
+    });
+
+    const { POST } = await import("./route");
+    const body = JSON.stringify(validPrPayload);
+    const signature = await sign(TEST_SECRET, body);
+
+    const req = new NextRequest("http://localhost:3000/api/webhook", {
+      method: "POST",
+      headers: {
+        "x-hub-signature-256": signature,
+        "x-github-delivery": "delivery-unknown-client-ok",
+        "x-github-event": "pull_request",
+      },
+      body,
+    });
+
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    // Pre-signature in-memory limiter was not called for unknown-client
+    expect(inMemSpy).not.toHaveBeenCalled();
+  });
+
   it("returns 429 with Retry-After when rate limit is exceeded", async () => {
     const rateLimitMod = await import("@/lib/rate-limit");
     vi.spyOn(rateLimitMod, "checkWebhookRateLimit").mockResolvedValueOnce({

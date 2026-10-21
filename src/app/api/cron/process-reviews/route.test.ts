@@ -114,7 +114,7 @@ function createMockSupabaseClient() {
         // 1. Mark jobs exceeding max_retries as failed
         mockDb.review_jobs.forEach((j) => {
           if (
-            ["pending", "processing", "deferred", "queued"].includes(j.status) &&
+            ["pending", "processing", "deferred", "queued", "partial"].includes(j.status) &&
             j.retry_count >= maxRetries
           ) {
             j.status = "failed";
@@ -126,7 +126,7 @@ function createMockSupabaseClient() {
         // 2. Find candidate jobs
         const candidates = mockDb.review_jobs.filter((j) => {
           if (j.retry_count >= maxRetries) return false;
-          if (j.status === "pending" || j.status === "queued") return true;
+          if (j.status === "pending" || j.status === "queued" || j.status === "partial") return true;
           if (j.status === "deferred" && includeDeferred) return true;
           if (j.status === "processing") {
             const started = j.started_at ? new Date(j.started_at).getTime() : 0;
@@ -137,7 +137,7 @@ function createMockSupabaseClient() {
 
         const claimed = candidates.slice(0, claimLimit);
         claimed.forEach((j) => {
-          if (j.status === "processing") {
+          if (j.status === "processing" || j.status === "partial") {
             j.retry_count += 1;
           }
           j.status = "processing";
@@ -470,6 +470,47 @@ describe("POST /api/cron/process-reviews", () => {
       expect(remainingIds).toContain("deliv-referenced-old");
       expect(remainingIds).toContain("deliv-recent");
       expect(remainingIds).not.toContain("deliv-unreferenced-old");
+    });
+
+    it("claims timed-out partial jobs for resumption, increments retry count, and enforces max retries limit", async () => {
+      const processSpy = vi.spyOn(processor, "processReview").mockResolvedValue();
+
+      // Job 1: partial job eligible for retry (retry_count = 1)
+      mockDb.review_jobs.push({
+        id: "partial-job-eligible",
+        status: "partial",
+        retry_count: 1,
+        created_at: new Date(Date.now() - 100000).toISOString(),
+      });
+
+      // Job 2: partial job that reached max retries (retry_count = 5)
+      mockDb.review_jobs.push({
+        id: "partial-job-max-retries",
+        status: "partial",
+        retry_count: 5,
+        created_at: new Date(Date.now() - 200000).toISOString(),
+      });
+
+      const req = new Request("http://localhost/api/cron/process-reviews", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TEST_SECRET}` },
+      });
+
+      const res = await POST(req);
+      expect(res.status).toBe(200);
+
+      // Only the eligible partial job should be claimed and processed
+      expect(processSpy).toHaveBeenCalledWith("partial-job-eligible");
+      expect(processSpy).not.toHaveBeenCalledWith("partial-job-max-retries");
+
+      // Verify eligible job had its retry_count incremented
+      const job1 = mockDb.review_jobs.find((j) => j.id === "partial-job-eligible");
+      expect(job1?.retry_count).toBe(2);
+
+      // Verify job exceeding max retries was transitioned to 'failed'
+      const job2 = mockDb.review_jobs.find((j) => j.id === "partial-job-max-retries");
+      expect(job2?.status).toBe("failed");
+      expect(job2?.error_message).toContain("Max retries reached");
     });
 
     it("cron route still processes jobs when cleanup throws an error", async () => {
