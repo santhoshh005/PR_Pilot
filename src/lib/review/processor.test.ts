@@ -134,7 +134,22 @@ function createMockSupabaseClient() {
       };
       return chain;
     },
-    rpc: async (fn: string): Promise<{ data: unknown; error: unknown }> => {
+    rpc: async (fn: string, args?: Record<string, unknown>): Promise<{ data: unknown; error: unknown }> => {
+      if (fn === "reserve_daily_api_usage") {
+        const today = (args?.p_usage_date as string) || new Date().toISOString().slice(0, 10);
+        const count = Number(args?.p_count || 1);
+        const limit = Number(args?.p_limit || 1500);
+        let row = mockDb.daily_api_usage.find((r) => r.usage_date === today);
+        if (!row) {
+          row = { usage_date: today, call_count: 0, updated_at: new Date().toISOString() };
+          mockDb.daily_api_usage.push(row);
+        }
+        if (Number(row.call_count || 0) + count <= limit) {
+          row.call_count = Number(row.call_count || 0) + count;
+          return { data: true, error: null };
+        }
+        return { data: false, error: null };
+      }
       if (fn === "increment_daily_api_usage") {
         const today = new Date().toISOString().slice(0, 10);
         let row = mockDb.daily_api_usage.find((r) => r.usage_date === today);
@@ -754,6 +769,72 @@ describe("Review Processor / Orchestrator", () => {
       const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
       expect(job?.retry_count).toBe(1);
       expect(job?.status).toBe("queued");
+    });
+
+    it("atomically calls reserve_daily_api_usage before calling Gemini, and marks chunk retry_later without calling Gemini when quota reservation fails", async () => {
+      const rpcSpy = vi.spyOn(mockSupabase, "rpc").mockImplementation(async (fn: string) => {
+        if (fn === "reserve_daily_api_usage") {
+          return { data: false, error: null };
+        }
+        return { data: null, error: null };
+      });
+
+      const geminiSpy = vi.spyOn(geminiReview, "reviewChunk");
+
+      await processReview(dummyJobId);
+
+      expect(rpcSpy).toHaveBeenCalledWith(
+        "reserve_daily_api_usage",
+        expect.objectContaining({ p_count: 1 })
+      );
+      expect(geminiSpy).not.toHaveBeenCalled();
+
+      const chunk = mockDb.review_chunks[0];
+      expect(chunk?.status).toBe("retry_later");
+    });
+
+    it("resumes partial job by skipping already completed chunks and reviewing only pending chunks", async () => {
+      vi.spyOn(diffParser, "parseDiff").mockReturnValue([
+        { index: 0, file_path: "file1.ts", content: "+code1", token_estimate: 4000 },
+        { index: 1, file_path: "file2.ts", content: "+code2", token_estimate: 4000 },
+      ] as unknown as DiffChunk[]);
+
+      const partialJob = mockDb.review_jobs.find((j) => j.id === dummyJobId)!;
+      partialJob.status = "partial";
+      partialJob.total_chunks = 2;
+      partialJob.completed_chunks = 1;
+
+      mockDb.review_chunks.push({
+        id: "chunk-0-id",
+        job_id: dummyJobId,
+        chunk_index: 0,
+        file_path: "file1.ts",
+        diff_content: "+code1",
+        status: "completed",
+        review_json: {
+          chunk_summary: "Existing chunk 0 review.",
+          comments: [],
+          severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+        },
+      });
+
+      const geminiSpy = vi.spyOn(geminiReview, "reviewChunk").mockResolvedValue({
+        chunk_summary: "Newly reviewed chunk 1.",
+        comments: [],
+        severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+      });
+
+      await processReview(dummyJobId);
+
+      // Gemini should only be called for chunk 1, skipping already completed chunk 0
+      expect(geminiSpy).toHaveBeenCalledTimes(1);
+      expect(geminiSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ index: 1, file_path: "file2.ts" }),
+        expect.anything()
+      );
+
+      expect(partialJob.status).toBe("completed");
+      expect(partialJob.completed_chunks).toBe(2);
     });
   });
 });

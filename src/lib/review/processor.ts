@@ -199,7 +199,15 @@ async function loadJobContext(
     .single();
 
   if (jobError || !job) return { context: null };
-  if (job.status !== "pending" && job.status !== "processing") return { context: null };
+  if (
+    job.status !== "pending" &&
+    job.status !== "processing" &&
+    job.status !== "deferred" &&
+    job.status !== "partial" &&
+    job.status !== "queued"
+  ) {
+    return { context: null };
+  }
 
   const repo = await loadRepo(supabase, job.repo_id);
   if (!repo) return { context: null, errorReason: "Associated repository not found" };
@@ -397,18 +405,35 @@ async function initializeJobChunks(
   jobId: string,
   chunks: ParsedDiffChunk[]
 ): Promise<void> {
-  const rows = chunks.map((chunk, idx) => ({
-    job_id: jobId,
-    chunk_index: idx,
-    file_path: chunk.file_path,
-    diff_content: chunk.content,
-    status: "pending",
-  }));
+  const { data: existingChunks } = await supabase
+    .from("review_chunks")
+    .select("chunk_index, status")
+    .eq("job_id", jobId);
 
-  await supabase.from("review_chunks").insert(rows);
+  const existingIndices = new Set(
+    existingChunks?.map((c) => c.chunk_index) || []
+  );
+
+  const newRows = chunks
+    .filter((_, idx) => !existingIndices.has(idx))
+    .map((chunk, idx) => ({
+      job_id: jobId,
+      chunk_index: idx,
+      file_path: chunk.file_path,
+      diff_content: chunk.content,
+      status: "pending",
+    }));
+
+  if (newRows.length > 0) {
+    await supabase.from("review_chunks").insert(newRows);
+  }
+
+  const completedCount =
+    existingChunks?.filter((c) => c.status === "completed").length || 0;
+
   await supabase
     .from("review_jobs")
-    .update({ total_chunks: chunks.length, completed_chunks: 0 })
+    .update({ total_chunks: chunks.length, completed_chunks: completedCount })
     .eq("id", jobId);
 }
 
@@ -424,13 +449,41 @@ async function executeChunkReviews(
   const executionResults: ChunkExecutionResult[] = [];
   let reachedDeadline = false;
 
-  for (let i = 0; i < chunks.length; i += concurrency) {
+  // Retrieve already completed chunks to avoid redundant Gemini reviews
+  const { data: existingDbChunks } = await supabase
+    .from("review_chunks")
+    .select("chunk_index, file_path, status, review_json")
+    .eq("job_id", jobId);
+
+  const completedChunkMap = new Map<number, ChunkExecutionResult>();
+  for (const c of existingDbChunks || []) {
+    if (c.status === "completed" && c.review_json) {
+      completedChunkMap.set(c.chunk_index, {
+        chunkIndex: c.chunk_index,
+        filePath: c.file_path,
+        result: c.review_json as ChunkReviewResult,
+        status: "completed",
+      });
+    }
+  }
+
+  // Pre-populate executionResults with already completed chunks
+  for (const chunk of chunks) {
+    const existing = completedChunkMap.get(chunk.index);
+    if (existing) {
+      executionResults.push(existing);
+    }
+  }
+
+  const pendingChunks = chunks.filter((c) => !completedChunkMap.has(c.index));
+
+  for (let i = 0; i < pendingChunks.length; i += concurrency) {
     if (Date.now() >= deadline) {
       reachedDeadline = true;
       break;
     }
 
-    const batch = chunks.slice(i, i + concurrency);
+    const batch = pendingChunks.slice(i, i + concurrency);
     const batchPromises = batch.map((chunk) =>
       processSingleChunk(supabase, jobId, chunk, context, chunkTimeoutMs)
     );
@@ -454,7 +507,12 @@ async function processSingleChunk(
   timeoutMs: number
 ): Promise<ChunkExecutionResult> {
   try {
-    await incrementUsage(supabase);
+    const reserved = await reserveUsage(supabase, 1);
+    if (!reserved) {
+      const quotaErr = new Error("Daily Gemini API budget exhausted");
+      (quotaErr as { isUnavailable?: boolean }).isUnavailable = true;
+      throw quotaErr;
+    }
 
     const result = await reviewWithTimeout(chunk, context, timeoutMs);
 
@@ -471,7 +529,11 @@ async function processSingleChunk(
       status: "completed",
     };
   } catch (err: unknown) {
-    const isUnavailable = isUnavailableError(err);
+    const isUnavailable =
+      isUnavailableError(err) ||
+      (err as { isUnavailable?: boolean })?.isUnavailable === true ||
+      (err as { message?: string })?.message?.includes("Daily Gemini API budget exhausted");
+
     const status = isUnavailable ? "retry_later" : "error";
 
     await supabase
@@ -511,11 +573,27 @@ async function reviewWithTimeout(
   });
 }
 
-async function incrementUsage(supabase: SupabaseClient): Promise<void> {
-  const { error } = await supabase.rpc("increment_daily_api_usage");
+async function reserveUsage(
+  supabase: SupabaseClient,
+  count: number = 1
+): Promise<boolean> {
+  const dailyLimit = process.env.GEMINI_DAILY_LIMIT
+    ? parseInt(process.env.GEMINI_DAILY_LIMIT, 10)
+    : 1500;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { data, error } = await supabase.rpc("reserve_daily_api_usage", {
+    p_usage_date: today,
+    p_count: count,
+    p_limit: dailyLimit,
+  });
+
   if (error) {
-    throw new Error(`Failed to increment daily API usage: ${error.message}`);
+    console.warn("[PROCESS_REVIEW] reserve_daily_api_usage error:", error.message);
+    throw new Error(`Failed to reserve daily API usage: ${error.message}`);
   }
+
+  return Boolean(data);
 }
 
 async function finalizeReviewJob(
