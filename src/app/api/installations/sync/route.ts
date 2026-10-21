@@ -106,6 +106,7 @@ export async function POST(request?: Request) {
 
     let totalSyncedInstallations = 0;
     let totalSyncedRepos = 0;
+    let totalBackfilledJobs = 0;
 
     // 6. For each valid personal installation, upsert installation and sync its repositories
     for (const inst of userInstallations) {
@@ -173,6 +174,10 @@ export async function POST(request?: Request) {
         .select("id, github_repo_id")
         .eq("installation_id", dbInst.id);
 
+      const existingRepoGithubIds = new Set(
+        (existingRepos || []).map((r) => Number(r.github_repo_id))
+      );
+
       const activeGitHubRepoIds = new Set(gitHubRepos.map((r) => r.id));
       for (const existingRepo of existingRepos || []) {
         if (!activeGitHubRepoIds.has(Number(existingRepo.github_repo_id))) {
@@ -185,6 +190,8 @@ export async function POST(request?: Request) {
 
       // 9. Upsert repos and create default repo_settings
       for (const repo of gitHubRepos) {
+        const isNewRepo = !existingRepoGithubIds.has(Number(repo.id));
+
         // SERVICE_ROLE: upsert repo row
         const { data: dbRepo, error: repoUpsertErr } = await serviceClient
           .from("repos")
@@ -226,6 +233,63 @@ export async function POST(request?: Request) {
           );
 
         totalSyncedRepos++;
+
+        // 10. Backfill open PRs for newly synced repositories (capped at 5 per repo, max 20 total per sync)
+        if (isNewRepo && totalBackfilledJobs < 20) {
+          try {
+            const { data: openPulls } = await instOctokit.rest.pulls.list({
+              owner: repo.owner.login,
+              repo: repo.name,
+              state: "open",
+              per_page: 10,
+            });
+
+            const eligiblePulls = (openPulls || [])
+              .filter(
+                (pr) =>
+                  !pr.draft &&
+                  pr.head?.sha &&
+                  pr.base?.sha &&
+                  pr.number !== undefined
+              )
+              .slice(0, Math.min(5, 20 - totalBackfilledJobs));
+
+            for (const pr of eligiblePulls) {
+              const deliveryId = `backfill-sync-${dbRepo.id}-${pr.number}-${pr.head.sha}`;
+              const { error: delErr } = await serviceClient
+                .from("webhook_deliveries")
+                .insert({
+                  delivery_id: deliveryId,
+                  event: "pull_request",
+                  action: "opened",
+                });
+
+              if (delErr) continue;
+
+              const { error: jobErr } = await serviceClient
+                .from("review_jobs")
+                .insert({
+                  repo_id: dbRepo.id,
+                  pr_number: pr.number,
+                  pr_title: pr.title || `PR #${pr.number}`,
+                  pr_author: pr.user?.login || "unknown",
+                  head_sha: pr.head.sha,
+                  base_sha: pr.base.sha,
+                  delivery_id: deliveryId,
+                  status: "pending",
+                });
+
+              if (!jobErr) {
+                totalBackfilledJobs++;
+              }
+            }
+          } catch (backfillErr) {
+            console.warn(
+              `[INSTALLATIONS_SYNC] Failed to backfill open PRs for repo ${repo.full_name}:`,
+              backfillErr
+            );
+          }
+        }
       }
     }
 

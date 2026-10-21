@@ -43,6 +43,8 @@ let mockDb: {
   installations: MockInstallation[];
   repos: MockRepo[];
   repo_settings: MockRepoSettings[];
+  webhook_deliveries: Record<string, unknown>[];
+  review_jobs: Record<string, unknown>[];
 };
 
 function resetDb() {
@@ -51,6 +53,8 @@ function resetDb() {
     installations: [],
     repos: [],
     repo_settings: [],
+    webhook_deliveries: [],
+    review_jobs: [],
   };
 }
 
@@ -98,6 +102,25 @@ function createMockServiceClient() {
         delete: () => {
           isDelete = true;
           return chain;
+        },
+        insert: (values: Record<string, unknown> | Record<string, unknown>[]) => {
+          const rowsToInsert = Array.isArray(values) ? values : [values];
+          for (const item of rowsToInsert) {
+            currentTable.push({
+              id: item.id || `gen-${Math.random().toString(36).substring(2, 9)}`,
+              ...item,
+            });
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase query builder mock chaining interface
+          const insertChain: any = {
+            select: () => insertChain,
+            single: async () => ({
+              data: currentTable[currentTable.length - 1] || null,
+              error: null,
+            }),
+            then: (resolve: (val: unknown) => void) => resolve({ data: rowsToInsert, error: null }),
+          };
+          return insertChain;
         },
         upsert: (values: Record<string, unknown> | Record<string, unknown>[], options?: { onConflict?: string; ignoreDuplicates?: boolean }) => {
           const onConflict = options?.onConflict;
@@ -175,6 +198,7 @@ vi.mock("@/lib/supabase/service", () => ({
 
 const mockListInstallations = vi.fn();
 const mockListReposAccessibleToInstallation = vi.fn();
+const mockListPulls = vi.fn().mockResolvedValue({ data: [] });
 
 vi.mock("@/lib/github/app", () => ({
   getAppOctokit: vi.fn(() => ({
@@ -188,6 +212,9 @@ vi.mock("@/lib/github/app", () => ({
     rest: {
       apps: {
         listReposAccessibleToInstallation: mockListReposAccessibleToInstallation,
+      },
+      pulls: {
+        list: mockListPulls,
       },
     },
   })),
@@ -587,6 +614,244 @@ describe("POST /api/installations/sync", () => {
     expect(dbInst?.owner_id).toBe(userBProfile.id);
     // Repos under user B's installation must not be deleted
     expect(mockDb.repos.some((r) => r.github_repo_id === 5555)).toBe(true);
+  });
+
+  describe("Open PR Backfill on First Sync", () => {
+    it("enqueues open non-draft PRs as pending review jobs for newly synced repositories", async () => {
+      mockListInstallations.mockResolvedValueOnce({
+        data: [
+          {
+            id: 101,
+            target_type: "User",
+            account: {
+              id: userAProfile.github_user_id,
+              login: userAProfile.github_username,
+              type: "User",
+            },
+          },
+        ],
+      });
+
+      mockListReposAccessibleToInstallation.mockResolvedValueOnce({
+        data: {
+          total_count: 1,
+          repositories: [
+            {
+              id: 5001,
+              name: "fresh-repo",
+              full_name: "user-a/fresh-repo",
+              owner: { login: "user-a" },
+            },
+          ],
+        },
+      });
+
+      mockListPulls.mockResolvedValueOnce({
+        data: [
+          {
+            number: 42,
+            title: "Add fresh feature",
+            draft: false,
+            user: { login: "contributor1" },
+            head: { sha: "fresh-head-sha-123" },
+            base: { sha: "fresh-base-sha-456" },
+          },
+        ],
+      });
+
+      currentUser = { id: userAProfile.id };
+
+      const { POST } = await import("./route");
+      const res = await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+      expect(res.status).toBe(200);
+
+      // Verify that mockListPulls was called for the new repo
+      expect(mockListPulls).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "user-a",
+          repo: "fresh-repo",
+          state: "open",
+        })
+      );
+
+      // Verify job was created in review_jobs
+      expect(mockDb.review_jobs.length).toBe(1);
+      const job = mockDb.review_jobs[0];
+      expect(job.pr_number).toBe(42);
+      expect(job.pr_title).toBe("Add fresh feature");
+      expect(job.pr_author).toBe("contributor1");
+      expect(job.head_sha).toBe("fresh-head-sha-123");
+      expect(job.base_sha).toBe("fresh-base-sha-456");
+      expect(job.status).toBe("pending");
+      expect(job.delivery_id).toContain("backfill-sync-");
+
+      // Verify delivery record exists
+      expect(mockDb.webhook_deliveries.length).toBe(1);
+      expect(mockDb.webhook_deliveries[0].delivery_id).toBe(job.delivery_id);
+    });
+
+    it("ignores draft PRs when backfilling open PRs", async () => {
+      mockListInstallations.mockResolvedValueOnce({
+        data: [
+          {
+            id: 102,
+            target_type: "User",
+            account: {
+              id: userAProfile.github_user_id,
+              login: userAProfile.github_username,
+              type: "User",
+            },
+          },
+        ],
+      });
+
+      mockListReposAccessibleToInstallation.mockResolvedValueOnce({
+        data: {
+          total_count: 1,
+          repositories: [
+            {
+              id: 5002,
+              name: "drafts-repo",
+              full_name: "user-a/drafts-repo",
+              owner: { login: "user-a" },
+            },
+          ],
+        },
+      });
+
+      mockListPulls.mockResolvedValueOnce({
+        data: [
+          {
+            number: 99,
+            title: "WIP Draft PR",
+            draft: true, // draft!
+            user: { login: "contributor2" },
+            head: { sha: "draft-head-sha" },
+            base: { sha: "draft-base-sha" },
+          },
+        ],
+      });
+
+      currentUser = { id: userAProfile.id };
+
+      const { POST } = await import("./route");
+      const res = await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+      expect(res.status).toBe(200);
+
+      // Draft PR should be ignored
+      expect(mockDb.review_jobs.length).toBe(0);
+    });
+
+    it("does not backfill open PRs for repos that were already synced in database", async () => {
+      // Pre-existing installation and repo in DB
+      mockDb.installations.push({
+        id: "inst-existing-uuid",
+        installation_id: 103,
+        owner_id: userAProfile.id,
+        account_login: "user-a",
+        account_type: "User",
+      });
+
+      mockDb.repos.push({
+        id: "repo-existing-uuid",
+        installation_id: "inst-existing-uuid",
+        github_repo_id: 5003,
+        owner: "user-a",
+        name: "existing-repo",
+        full_name: "user-a/existing-repo",
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      });
+
+      mockListInstallations.mockResolvedValueOnce({
+        data: [
+          {
+            id: 103,
+            target_type: "User",
+            account: {
+              id: userAProfile.github_user_id,
+              login: userAProfile.github_username,
+              type: "User",
+            },
+          },
+        ],
+      });
+
+      mockListReposAccessibleToInstallation.mockResolvedValueOnce({
+        data: {
+          total_count: 1,
+          repositories: [
+            {
+              id: 5003,
+              name: "existing-repo",
+              full_name: "user-a/existing-repo",
+              owner: { login: "user-a" },
+            },
+          ],
+        },
+      });
+
+      currentUser = { id: userAProfile.id };
+
+      const { POST } = await import("./route");
+      const res = await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+      expect(res.status).toBe(200);
+
+      // Existing repo must NOT trigger pulls.list backfill
+      expect(mockListPulls).not.toHaveBeenCalled();
+      expect(mockDb.review_jobs.length).toBe(0);
+    });
+
+    it("caps backfill at 5 PRs per repo and max 20 PRs total", async () => {
+      mockListInstallations.mockResolvedValueOnce({
+        data: [
+          {
+            id: 104,
+            target_type: "User",
+            account: {
+              id: userAProfile.github_user_id,
+              login: userAProfile.github_username,
+              type: "User",
+            },
+          },
+        ],
+      });
+
+      mockListReposAccessibleToInstallation.mockResolvedValueOnce({
+        data: {
+          total_count: 1,
+          repositories: [
+            {
+              id: 5004,
+              name: "busy-repo",
+              full_name: "user-a/busy-repo",
+              owner: { login: "user-a" },
+            },
+          ],
+        },
+      });
+
+      // Returns 10 open PRs
+      const tenPulls = Array.from({ length: 10 }, (_, i) => ({
+        number: 100 + i,
+        title: `PR #${100 + i}`,
+        draft: false,
+        user: { login: `dev-${i}` },
+        head: { sha: `head-sha-${i}` },
+        base: { sha: `base-sha-${i}` },
+      }));
+
+      mockListPulls.mockResolvedValueOnce({ data: tenPulls });
+
+      currentUser = { id: userAProfile.id };
+
+      const { POST } = await import("./route");
+      const res = await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+      expect(res.status).toBe(200);
+
+      // Must be capped at 5 for this repo
+      expect(mockDb.review_jobs.length).toBe(5);
+    });
   });
 });
 
