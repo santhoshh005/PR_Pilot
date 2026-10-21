@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
+import { resetInMemoryRateLimits } from "@/lib/rate-limit";
 
 const mockExchangeCodeForSession = vi.fn();
 const mockUserClient = {
@@ -27,6 +28,7 @@ vi.mock("@/lib/supabase/service", () => ({
 describe("Auth Callback Route Handler (GET /api/auth/callback)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetInMemoryRateLimits();
   });
 
   it("redirects to /error when code parameter is missing", async () => {

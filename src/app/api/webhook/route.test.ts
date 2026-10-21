@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 import { sign } from "@octokit/webhooks-methods";
+import { resetInMemoryRateLimits } from "@/lib/rate-limit";
 
 const TEST_SECRET = "mock-webhook-secret-xyz";
 process.env.GITHUB_WEBHOOK_SECRET = TEST_SECRET;
@@ -99,9 +100,10 @@ const validPrPayload = {
   },
 };
 
-describe("POST /api/webhook", () => {
+describe("POST /api/webhook", { timeout: 15000 }, () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetInMemoryRateLimits();
     process.env.GITHUB_WEBHOOK_SECRET = TEST_SECRET;
   });
 

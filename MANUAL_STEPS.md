@@ -57,7 +57,7 @@ Every environment variable defined in `.env.local.example` must be populated. Us
 | `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | Direct install URL for the GitHub App (e.g. `https://github.com/apps/<app-slug>/installations/new`). Rendered in dashboard empty state. | No | **[YOU]** |
 
 > [!IMPORTANT]
-> **Initial Repository Sync**: Webhooks for pull requests on repositories not yet synced to the database (`repos` table) are ignored. Pull requests opened before the user triggers the first repository sync (via the "Sync Repositories" button on the dashboard) will not be reviewed. Users must install the app and sync repositories before PR reviews commence.
+> **Initial Repository Sync & Automatic Backfill**: When repositories are first synced to the database (via the "Sync Repositories" button on the dashboard or upon initial installation), PRPilot automatically backfills open non-draft pull requests (up to 5 per repository, max 20 total per sync) and enqueues them as pending review jobs. Webhooks for pull requests on repositories not yet synced to the database (`repos` table) are ignored until the repository is synced.
 
 - [ ] **[YOU]** Run generation command for secrets:
   ```bash

@@ -11,7 +11,9 @@ This document covers all security threats specific to a GitHub App that processe
 **Threat**: An attacker sends fake webhook payloads to `/api/webhook` to trigger unauthorized reviews or inject malicious data.
 
 **Mitigations**:
-- [ ] Verify `X-Hub-Signature-256` using HMAC-SHA256 with the webhook secret on the **raw request body** (before JSON parsing). Use `@octokit/webhooks-methods` `verify()` or `crypto.timingSafeEqual`.
+- [ ] Execute a fast in-memory rate limiter check first to absorb volumetric floods without database operations.
+- [ ] Verify `X-Hub-Signature-256` using HMAC-SHA256 with the webhook secret on the **raw request body** (before JSON parsing or database queries). Use `@octokit/webhooks-methods` `verify()` or `crypto.timingSafeEqual`.
+- [ ] Only AFTER the HMAC signature is verified, invoke Postgres-backed rate limiting and delivery ID checking.
 - [ ] Reject requests missing `X-Hub-Signature-256`, `X-GitHub-Delivery`, or `X-GitHub-Event` headers with `400`.
 - [ ] Store the webhook secret in `GITHUB_WEBHOOK_SECRET` env var, never in code.
 - [ ] Use constant-time comparison (`timingSafeEqual`) to prevent timing attacks.
@@ -97,8 +99,8 @@ This document covers all security threats specific to a GitHub App that processe
 - [ ] RLS is enabled on **every** table (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY`).
 - [ ] All SELECT policies chain through `installations.owner_id = (select auth.uid())`.
 - [ ] No INSERT/UPDATE/DELETE policies exist for dashboard users — only server-side code (service role) modifies data.
-- [ ] `webhook_deliveries` has NO user-facing policies — it's invisible to authenticated users.
-- [ ] Write a Playwright test that logs in as User A, creates data, logs in as User B, and verifies User B cannot see User A's data.
+- [ ] Internal tables (`daily_api_usage`, `webhook_deliveries`, `rate_limits`, `review_chunks`) have all privileges revoked from `authenticated`, `anon`, and `PUBLIC`; access is granted strictly to `service_role`.
+- [ ] Profile identity fields (`github_user_id`, `github_username`) have `UPDATE` privileges revoked from `authenticated` and are protected by `protect_profile_identity` `BEFORE UPDATE` trigger to prevent identity spoofing or account takeover.
 - [ ] The `TO authenticated` clause on every policy ensures anonymous users see nothing.
 
 ---
@@ -143,7 +145,10 @@ This document covers all security threats specific to a GitHub App that processe
 **Threat**: An attacker triggers many PRs rapidly to exhaust Gemini API quota, Supabase bandwidth, or Vercel compute.
 
 **Mitigations**:
-- [ ] Rate-limit `/api/webhook` to 60 requests/minute per IP using the Postgres-backed rate limiter on `rate_limits` table (failing open if database check errors).
+- [ ] Rate-limit `/api/webhook` using an in-memory pre-filter, followed by Postgres-backed rate limiting on `rate_limits` table (failing open to an in-memory sliding window fallback if database check errors).
+- [ ] Extract client IP prioritizing `x-vercel-forwarded-for`, `@vercel/functions` `ipAddress`, and `x-real-ip`, taking the last untrusted proxy or falling back to `"unknown-client"` to prevent client-spoofed `X-Forwarded-For` key flooding.
+- [ ] Enforce a bounded 50,000 row cap on the `rate_limits` table with eager expired row pruning.
+- [ ] Quotas are atomically reserved via `reserve_daily_api_usage` SQL function before calling Gemini, eliminating concurrency race conditions.
 - [ ] The review processor limits concurrent jobs: `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 3`.
 - [ ] If Gemini returns 429, exponential backoff with max 5 retries per job.
 - [ ] Monitor Gemini API usage via dashboard alerts.
@@ -157,7 +162,7 @@ This document covers all security threats specific to a GitHub App that processe
 **Mitigations**:
 - [ ] Supabase Auth uses `SameSite=Lax` cookies by default, which prevents CSRF on state-changing POST/PATCH/DELETE requests from cross-origin forms.
 - [ ] All state-changing dashboard endpoints use POST or PATCH (not GET).
-- [ ] The `/api/auth/signout` endpoint uses POST.
+- [ ] The `/api/auth/signout` endpoint strictly verifies same-origin (`Origin` or `Referer` matching application origin) and rejects cross-origin requests with 403 Forbidden.
 
 ---
 
@@ -191,5 +196,5 @@ This document covers all security threats specific to a GitHub App that processe
 ## Assumptions
 
 - **Webhook Body Size Limits**: Webhook body size enforcement relies on Vercel's platform-level 4.5 MB serverless request payload limit plus the application-level `Content-Length` header check.
-- **Endpoint Rate Limiting**: Distributed rate limiting uses Postgres only via an atomic stored procedure (`check_rate_limit`) on the `rate_limits` table. Protected routes (webhook, cron, auth, dashboard) all fail open (`failOpen: true`) if the rate limiter encounters an error, ensuring high availability in serverless environments.
+- **Endpoint Rate Limiting**: Distributed rate limiting uses Postgres via an atomic stored procedure (`check_rate_limit`) on the `rate_limits` table with a 50,000-row cap and eager cleanup. Protected routes (webhook, cron, auth, dashboard) all fail open (`failOpen: true`) using an in-memory sliding window fallback if the rate limiter encounters an error, ensuring high availability in serverless environments.
 

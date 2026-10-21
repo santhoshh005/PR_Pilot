@@ -16,6 +16,7 @@ vi.mock("@/lib/supabase/server", () => ({
 describe("Sign Out Route Handler (/api/auth/signout)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    rateLimitMod.resetInMemoryRateLimits();
   });
 
   it("exports POST handler and does NOT export GET handler", async () => {
