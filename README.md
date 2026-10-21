@@ -77,20 +77,27 @@ pnpm build
 
 ## Environment Variables
 
-All 9 required environment variables defined in `SECURITY.md`:
+All required environment variables defined in `SECURITY.md` and `.env.local.example`:
 
-| Variable | Location | Secret? | Description |
-|---|---|---|---|
-| `GITHUB_APP_ID` | Vercel / `.env.local` | No | Numeric ID of the GitHub App. |
-| `GITHUB_PRIVATE_KEY` | Vercel / `.env.local` | **Yes** | RSA private key (.pem) downloaded from GitHub App settings. |
-| `GITHUB_WEBHOOK_SECRET` | Vercel / `.env.local` | **Yes** | Random 32+ character HMAC secret for webhook signature verification. |
-| `NEXT_PUBLIC_SUPABASE_URL` | Vercel / `.env.local` | No | Supabase project URL (`https://<project-ref>.supabase.co`). |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Vercel / `.env.local` | No | Supabase anonymous / public key safe for client-side bundle. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Vercel / `.env.local` | **Yes** | Supabase service-role secret key (bypasses RLS on server only). |
-| `GEMINI_API_KEY` | Vercel / `.env.local` | **Yes** | Google Gemini API key from Google AI Studio. |
-| `CRON_SECRET` | Vercel / `.env.local` | **Yes** | Bearer authorization token protecting the `/api/cron/process-reviews` endpoint. |
-| `NEXT_PUBLIC_APP_URL` | Vercel / `.env.local` | No | Base application URL (`http://localhost:3000` or `https://<app>.vercel.app`). |
-| `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | Vercel / `.env.local` | No | Optional direct URL to install the GitHub App, displayed as an action link in the dashboard empty state. |
+| Variable | Scope | Location | Secret? | Description |
+|---|---|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | **Build-Time** (inlined) | Vercel / `.env.local` | No | Supabase project URL (`https://<project-ref>.supabase.co`). |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | **Build-Time** (inlined) | Vercel / `.env.local` | No | Supabase anonymous / public key safe for client-side bundle. |
+| `NEXT_PUBLIC_APP_URL` | **Build-Time** (inlined) | Vercel / `.env.local` | No | Base application URL (`http://localhost:3000` or `https://<app>.vercel.app`). |
+| `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | **Build-Time** (inlined) | Vercel / `.env.local` | No | Optional direct URL to install GitHub App, displayed in dashboard empty state. |
+| `GITHUB_APP_ID` | **Runtime-Only** | Vercel / `.env.local` | No | Numeric ID of the GitHub App. |
+| `GITHUB_PRIVATE_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | RSA private key (.pem) from GitHub App (multiline or `\n` escaped). |
+| `GITHUB_WEBHOOK_SECRET` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Random 32+ character HMAC secret for webhook signature verification. |
+| `SUPABASE_SERVICE_ROLE_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Supabase service-role secret key (bypasses RLS on server only). |
+| `GEMINI_API_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Google Gemini API key from Google AI Studio. |
+| `CRON_SECRET` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Bearer authorization token protecting `/api/cron/process-reviews`. |
+| `GEMINI_MODEL` | **Runtime-Only** | Vercel / `.env.local` | No | Model name (default: `gemini-3.8-flash`). |
+| `GEMINI_DAILY_LIMIT` | **Runtime-Only** | Vercel / `.env.local` | No | Daily request budget cap (e.g. `15` free tier, `1500` standard). |
+| `GEMINI_CONCURRENCY` | **Runtime-Only** | Vercel / `.env.local` | No | Max concurrent chunk LLM requests (default: `2`). |
+| `GEMINI_THINKING_LEVEL` | **Runtime-Only** | Vercel / `.env.local` | No | Thinking budget for Flash models: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` (default: `LOW`). |
+
+> [!NOTE]
+> Next.js inlines `NEXT_PUBLIC_*` variables into client-side JavaScript bundles at build time. Changing any `NEXT_PUBLIC_*` variable in Vercel Project Settings requires triggering a **Redeploy** for changes to take effect in the browser. Server-only runtime variables are read on-demand by Serverless Functions. Build tolerance allows `next build` to complete successfully even when GitHub runtime credentials are unset during initial provisioning.
 
 ---
 
@@ -122,38 +129,40 @@ All 9 required environment variables defined in `SECURITY.md`:
 ## GitHub App Configuration
 
 1. In GitHub, go to **Settings > Developer Settings > GitHub Apps > New GitHub App**.
-2. Set **App name**, **Homepage URL**, and **Callback URL** (`https://<your-app>.vercel.app/api/auth/callback` or `http://localhost:3000/api/auth/callback`).
-3. Check **Request user authorization (OAuth) during installation**.
-4. Set **Webhook URL** to `https://<your-app>.vercel.app/api/webhook`.
-5. Set **Webhook secret** to the random string matching `GITHUB_WEBHOOK_SECRET`.
-6. Configure **Permissions**:
-   - **Pull requests**: `Read & write` (fetch diffs, post review comments and summaries)
-   - **Metadata**: `Read-only` (default GitHub requirement)
+2. Configure core fields:
+   - **App name**: `prpilot-<your-unique-suffix>`
+   - **Homepage URL**: `https://<your-app>.vercel.app`
+   - **Callback URL**: `https://<project-ref>.supabase.co/auth/v1/callback` (for project `ajsvejrikxaqztbnctwj`: `https://ajsvejrikxaqztbnctwj.supabase.co/auth/v1/callback`). *Note: GitHub redirects to Supabase Auth here; do not set this to `/api/auth/callback`.*
+   - **Setup URL (Redirect after installation)**: `https://<your-app>.vercel.app/dashboard`
+   - **Request user authorization (OAuth) during installation**: Checked
+3. Configure webhook:
+   - **Webhook URL**: `https://<your-app>.vercel.app/api/webhook`
+   - **Webhook secret**: Generated string matching `GITHUB_WEBHOOK_SECRET`
+4. Configure permissions (least privilege):
+   - **Pull requests**: `Read & write` (diff fetching, posting and updating review comments)
+   - **Metadata**: `Read-only` (default mandatory permission)
    - *All other permissions*: `No access`
-7. Under **Subscribe to events**, select **Pull request**.
-8. Generate and download a **Private key** (`.pem`) and note the **App ID**.
+5. Under **Subscribe to events**, select **Pull request**.
+6. Set **Where can this GitHub App be installed?** to **Only on this account**.
+7. Create the app, copy the numeric **App ID**, generate a **Client Secret** (under Client secrets), and generate a **Private key** (`.pem` file).
 
 ---
 
-## Vercel Deployment Configuration
+## Deployment Sequence & Vercel Configuration
 
-Deployment is handled natively via Vercel's GitHub integration on every push to the `main` branch.
+For a detailed step-by-step checklist with `[YOU]` vs `[AGENT]` responsibility markers, consult [`MANUAL_STEPS.md`](./MANUAL_STEPS.md). To avoid circular dependency traps:
 
-1. Import the repository into [Vercel](https://vercel.com).
-2. Configure project settings:
-   - **Framework Preset**: `Next.js`
-   - **Root Directory**: `./`
-   - **Build Command**: `pnpm build`
-   - **Install Command**: `pnpm install`
-3. Add the 10 environment variables listed above under **Project Settings > Environment Variables** for Production and Preview environments.
-4. Deploy the project and copy your production domain.
-5. In Supabase Dashboard:
-   - Navigate to **Authentication > URL Configuration**.
-   - Set **Site URL** to `https://<your-app>.vercel.app`.
-   - Under **Redirect URLs**, add the required allow-list patterns:
-     - `http://localhost:3000/**` (Local development)
-     - `https://<your-app>.vercel.app/**` (Production)
-   - **Vercel Preview Deployments**: Dynamic branch preview URLs (e.g. `https://prpilot-git-*.vercel.app`) are **not** accepted for OAuth unless an account-scoped pattern (such as `https://*-<your-team-or-account-slug>.vercel.app/**`) is explicitly added to Supabase Auth Redirect URLs, and `NEXT_PUBLIC_APP_URL` is set accordingly (never use un-scoped `https://*.vercel.app/**`). Otherwise, sign-in attempts on preview deployments will be rejected by Supabase Auth or redirected back to the configured production `NEXT_PUBLIC_APP_URL`.
+1. **Push Code**: Commit and push all code to GitHub on `main`.
+2. **Initial Vercel Import & Domain Claim**: Import repository into Vercel, assign project name to claim canonical domain (`https://<your-project>.vercel.app`), populate known Supabase, Gemini, and Cron variables, and deploy.
+3. **Supabase Auth URL Configuration**: In Supabase Dashboard > Authentication > URL Configuration:
+   - Set **Site URL** to `https://<your-project>.vercel.app`.
+   - Add `http://localhost:3000/**` and `https://<your-project>.vercel.app/**` to **Redirect URLs**.
+4. **Register GitHub App**: Register the app using the canonical Vercel domain for Webhook/Setup and the Supabase callback URL for Callback URL. Obtain App ID, Client ID, Client Secret, and Private Key.
+5. **Enable GitHub Provider in Supabase**: In Supabase Dashboard > Authentication > Providers > GitHub, enable GitHub and enter the GitHub App's Client ID and Client Secret.
+6. **Populate GitHub Variables in Vercel & Redeploy**: Add `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` in Vercel Project Settings and trigger a **Redeploy**.
+7. **Vercel Deployment Protection**: In Vercel Project Settings > Deployment Protection, ensure Vercel Authentication is disabled for Production (or configure Protection Bypass for Automation) so GitHub webhooks and cron triggers are not blocked by 401/307 authentication challenges.
+8. **Configure GitHub Actions Cron**: In GitHub repo Settings > Secrets and variables > Actions, configure repository secret `CRON_SECRET` and variable `APP_URL`.
+9. **Install App & Test**: Install the GitHub App on your personal account and open a test PR to verify the end-to-end review flow.
 
 ---
 
