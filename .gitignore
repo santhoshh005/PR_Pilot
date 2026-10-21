@@ -6,6 +6,10 @@
 
 # Testing
 /coverage
+/test-results
+/playwright-report
+.auth/
+*.storageState.json
 
 # Next.js
 /.next/
@@ -22,8 +26,6 @@
 .env.production
 .env.development
 *.pem
-/test-results
-/playwright-report
 
 # Logs
 npm-debug.log*

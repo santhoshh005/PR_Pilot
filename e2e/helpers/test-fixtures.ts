@@ -73,12 +73,9 @@ export function getSupabaseConfig(): SupabaseConfig {
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     fileEnv.SUPABASE_SERVICE_ROLE_KEY ||
     "";
+  // Strictly test-only webhook secret generated/set for the test run, never real secret from .env.local
   const webhookSecret =
-    process.env.GITHUB_WEBHOOK_SECRET ||
-    fileEnv.GITHUB_WEBHOOK_SECRET ||
-    process.env.WEBHOOK_SECRET ||
-    fileEnv.WEBHOOK_SECRET ||
-    "";
+    process.env.E2E_WEBHOOK_SECRET || "e2e-test-webhook-secret-do-not-use-in-prod";
 
   return { supabaseUrl, anonKey, serviceKey, webhookSecret };
 }
