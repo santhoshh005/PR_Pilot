@@ -12,6 +12,7 @@ const mockOrderFn = vi.fn();
 
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => mockRedirect(url),
+  useRouter: () => ({ refresh: vi.fn() }),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -90,6 +91,21 @@ describe("Dashboard Page (RSC)", { timeout: 15000 }, () => {
       screen.getByText(/You haven't connected any repositories yet/i)
     ).toBeDefined();
     expect(screen.getByRole("button", { name: /Sync Repositories/i })).toBeDefined();
+  });
+
+  it("renders install link in empty state when NEXT_PUBLIC_GITHUB_APP_INSTALL_URL is configured", async () => {
+    process.env.NEXT_PUBLIC_GITHUB_APP_INSTALL_URL = "https://github.com/apps/prpilot-test/installations/new";
+    mockReposData = [];
+    const { default: DashboardPage } = await import("./page");
+
+    const Component = await DashboardPage();
+    render(Component);
+
+    const installLink = screen.getByRole("link", { name: /Install GitHub App/i });
+    expect(installLink).toBeDefined();
+    expect(installLink.getAttribute("href")).toBe("https://github.com/apps/prpilot-test/installations/new");
+
+    delete process.env.NEXT_PUBLIC_GITHUB_APP_INSTALL_URL;
   });
 
   it("renders repository cards when repositories exist", async () => {

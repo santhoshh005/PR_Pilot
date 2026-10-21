@@ -68,6 +68,11 @@ test.describe("E2E - Dashboard & Repository Management", () => {
     // 3. User B receives strict 404 on API endpoints
     const apiRes = await page.request.get(`/api/repos/${seededA.repoId}/reviews`);
     expect(apiRes.status()).toBe(404);
+
+    // 4. User B visits their own dashboard and sees empty state with Sync button
+    await page.goto("/dashboard");
+    await expect(page.getByRole("heading", { name: /No repositories found/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Sync Repositories/i })).toBeVisible();
   });
 
   test("User A can view dashboard, charts, accessible tables, and review history", async ({

@@ -16,7 +16,7 @@ PRPilot is an autonomous AI-powered GitHub App that automatically reviews pull r
 
 ## Prerequisites
 
-- **Node.js**: `v20.x` or `v22.x` (LTS recommended)
+- **Node.js**: `v20.x`, `v22.x`, or `v24.x` (LTS or current)
 - **Package Manager**: `pnpm` (v12.x)
 - **Supabase Account**: A Supabase project with executed migrations (`supabase/migrations/`)
 - **Google AI Studio**: An API key with access to Gemini models
@@ -90,6 +90,18 @@ All 9 required environment variables defined in `SECURITY.md`:
 | `GEMINI_API_KEY` | Vercel / `.env.local` | **Yes** | Google Gemini API key from Google AI Studio. |
 | `CRON_SECRET` | Vercel / `.env.local` | **Yes** | Bearer authorization token protecting the `/api/cron/process-reviews` endpoint. |
 | `NEXT_PUBLIC_APP_URL` | Vercel / `.env.local` | No | Base application URL (`http://localhost:3000` or `https://<app>.vercel.app`). |
+| `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | Vercel / `.env.local` | No | Optional direct URL to install the GitHub App, displayed as an action link in the dashboard empty state. |
+
+---
+
+## Known Limitations
+
+- **Personal-account installations only**: Organization installations are ignored in v1 (`account_type === 'User'` enforced during installation sync).
+- **Head commit deduplication**: Two pull requests within the same repository that share the identical head commit SHA reuse the single review result.
+- **Gemini free-tier daily quota**: On free-tier Gemini API keys, exhausting the daily request or token budget defers pending review jobs until quota resets the following day.
+- **Fail-open rate limiting**: In-memory and database rate limit checks fail open if the database connection encounters an unexpected transient error.
+- **Cron fallback cadence**: Scheduled fallback review processing runs every 30 minutes on private repositories (or every 5 minutes on public repositories) due to GitHub Actions scheduled workflow limitations.
+- **Initial repository sync**: Pull requests opened on repositories before the initial repository sync is triggered (via the "Sync Repositories" button in the dashboard) are not reviewed.
 
 ---
 

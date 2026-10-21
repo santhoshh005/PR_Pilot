@@ -2,6 +2,7 @@ import * as React from "react";
 import { redirect } from "next/navigation";
 import { createUserClient } from "@/lib/supabase/server";
 import { RepoCard } from "@/components/dashboard/repo-card";
+import { SyncButton } from "@/components/dashboard/sync-button";
 import { Button } from "@/components/ui/button";
 import { DashboardRepo } from "@/types";
 
@@ -99,6 +100,8 @@ export default async function DashboardPage() {
 
   // Empty State
   if (repos.length === 0) {
+    const installUrl = process.env.NEXT_PUBLIC_GITHUB_APP_INSTALL_URL;
+
     return (
       <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 dark:border-zinc-800 bg-white dark:bg-zinc-900/40 p-12 text-center">
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 mb-4">
@@ -112,12 +115,23 @@ export default async function DashboardPage() {
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
           You haven&apos;t connected any repositories yet. Install the PRPilot GitHub App or sync your installations to get started.
         </p>
+        <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500 max-w-md">
+          Note: Pull requests opened before syncing your repositories are not automatically reviewed.
+        </p>
         <div className="mt-6 flex flex-col sm:flex-row items-center gap-3">
-          <form action="/api/installations/sync" method="POST">
-            <Button type="submit" variant="default" size="sm">
-              Sync Repositories
-            </Button>
-          </form>
+          {installUrl && (
+            <a
+              href={installUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center rounded-md bg-zinc-900 px-3.5 py-1.5 text-sm font-semibold text-white shadow-xs hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            >
+              Install GitHub App
+            </a>
+          )}
+          <SyncButton variant={installUrl ? "outline" : "default"} size="sm">
+            Sync Repositories
+          </SyncButton>
         </div>
       </div>
     );

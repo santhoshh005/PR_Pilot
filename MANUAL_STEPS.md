@@ -11,6 +11,7 @@ Navigate to GitHub: **Settings > Developer Settings > GitHub Apps > New GitHub A
 - [ ] **[YOU]** **App name**: Choose a unique name, e.g., `PRPilot-Reviewer` (or `PRPilot-<your-github-username>`).
 - [ ] **[YOU]** **Homepage URL**: Enter your landing page or temporary placeholder, e.g., `https://github.com/<your-username>/PR_Pilot` (or your planned Vercel URL).
 - [ ] **[YOU]** **Callback URL**: Enter `http://localhost:3000/api/auth/callback` for local development, and add your production URL once deployed: `https://<your-app>.vercel.app/api/auth/callback`.
+- [ ] **[YOU]** **Setup URL (Redirect after installation)**: If the GitHub App settings offer a Setup URL, set it to `http://localhost:3000/dashboard` for local development, and `https://<your-app>.vercel.app/dashboard` for production. Users will be automatically redirected to their dashboard to sync repositories after installing the app.
 - [ ] **[YOU]** **Request user authorization (OAuth) during installation**: Check this box.
 - [ ] **[YOU]** **Webhook URL**: Enter a temporary placeholder during initial creation (e.g., `https://smee.io/<channel>` for local development or `https://placeholder.example.com/api/webhook`), to be updated with `https://<your-app>.vercel.app/api/webhook` upon deployment.
 - [ ] **[YOU]** **Webhook secret**: Generate a secure random string using:
@@ -53,6 +54,10 @@ Every environment variable defined in `.env.local.example` must be populated. Us
 | `GEMINI_THINKING_LEVEL` | Thinking budget for Flash models. E.g., `LOW` or `OFF`. | No | **[YOU]** |
 | `CRON_SECRET` | Generate a 32+ character random string via `openssl rand -hex 32`. | **Yes** | **[YOU]** |
 | `NEXT_PUBLIC_APP_URL` | Local: `http://localhost:3000`. Production: `https://<your-vercel-domain>.vercel.app`. | No | **[YOU]** |
+| `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | Direct install URL for the GitHub App (e.g. `https://github.com/apps/<app-slug>/installations/new`). Rendered in dashboard empty state. | No | **[YOU]** |
+
+> [!IMPORTANT]
+> **Initial Repository Sync**: Webhooks for pull requests on repositories not yet synced to the local database are ignored. Pull requests opened before the user triggers the first repository sync (via the "Sync Repositories" button on the dashboard) will not be reviewed. Users must install the app and sync repositories before PR reviews commence.
 
 - [ ] **[YOU]** Run generation command for secrets:
   ```bash
@@ -72,7 +77,7 @@ Every environment variable defined in `.env.local.example` must be populated. Us
 - [ ] **[YOU]** Sign in to [Vercel](https://vercel.com) and click **Add New > Project**.
 - [ ] **[YOU]** Import your GitHub repository (`PR_Pilot`).
 - [ ] **[YOU]** Framework preset: Verify `Next.js` is selected.
-- [ ] **[YOU]** Node.js version: Verify Node.js 18.x or 20.x is configured in Project Settings.
+- [ ] **[YOU]** Node.js version: Verify Node.js 20.x, 22.x, or 24.x is configured in Project Settings.
 - [ ] **[YOU]** Build & Development Settings:
   - Install Command: `pnpm install`
   - Build Command: `pnpm build`

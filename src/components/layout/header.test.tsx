@@ -3,6 +3,10 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { Header } from "./header";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
+
 describe("Header Component", { timeout: 15000 }, () => {
   const userWithAvatar = {
     id: "user-1",
@@ -45,5 +49,10 @@ describe("Header Component", { timeout: 15000 }, () => {
   it("renders sign out action button", () => {
     render(<Header user={userWithAvatar} />);
     expect(screen.getByRole("button", { name: /Sign Out/i })).toBeDefined();
+  });
+
+  it("renders sync repositories action button in header", () => {
+    render(<Header user={userWithAvatar} />);
+    expect(screen.getByRole("button", { name: /Sync Repos/i })).toBeDefined();
   });
 });
