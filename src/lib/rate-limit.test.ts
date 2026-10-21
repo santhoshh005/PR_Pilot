@@ -16,23 +16,33 @@ import {
 
 describe("Rate Limiting Utilities", () => {
   describe("getClientIp", () => {
-    it("extracts the first IP from x-forwarded-for header", () => {
+    it("extracts IP from x-vercel-forwarded-for header with top priority", () => {
       const req = new Request("http://localhost:3000", {
-        headers: { "x-forwarded-for": "203.0.113.195, 70.41.3.18, 150.172.238.178" },
+        headers: {
+          "x-vercel-forwarded-for": "198.51.100.99",
+          "x-forwarded-for": "203.0.113.195, 70.41.3.18",
+        },
       });
-      expect(getClientIp(req)).toBe("203.0.113.195");
+      expect(getClientIp(req)).toBe("198.51.100.99");
     });
 
-    it("falls back to x-real-ip if x-forwarded-for is missing", () => {
+    it("falls back to x-real-ip if x-vercel-forwarded-for is missing", () => {
       const req = new Request("http://localhost:3000", {
         headers: { "x-real-ip": "198.51.100.22" },
       });
       expect(getClientIp(req)).toBe("198.51.100.22");
     });
 
-    it("falls back to 127.0.0.1 if no IP headers are present", () => {
+    it("takes the LAST untrusted proxy in x-forwarded-for to prevent client-spoofed first IP", () => {
+      const req = new Request("http://localhost:3000", {
+        headers: { "x-forwarded-for": "203.0.113.195, 70.41.3.18, 150.172.238.178" },
+      });
+      expect(getClientIp(req)).toBe("150.172.238.178");
+    });
+
+    it("falls back to 'unknown-client' if no IP headers are present", () => {
       const req = new Request("http://localhost:3000");
-      expect(getClientIp(req)).toBe("127.0.0.1");
+      expect(getClientIp(req)).toBe("unknown-client");
     });
   });
 
@@ -108,7 +118,7 @@ describe("Rate Limiting Utilities", () => {
       expect(result.retryAfter).toBe(30);
     });
 
-    it("fails open when database call encounters an error (default failOpen: true)", async () => {
+    it("fails open using memory fallback when database call encounters an error (default failOpen: true)", async () => {
       const mockClient = {
         rpc: vi.fn().mockResolvedValue({
           data: null,
@@ -118,7 +128,7 @@ describe("Rate Limiting Utilities", () => {
 
       const result = await checkRateLimit("test-key", 60, 60, { client: mockClient as unknown as ReturnType<typeof createServiceClient> });
       expect(result.allowed).toBe(true);
-      expect(result.remaining).toBe(1);
+      expect(result.remaining).toBe(59);
       expect(result.retryAfter).toBe(0);
     });
 

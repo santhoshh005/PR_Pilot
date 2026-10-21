@@ -127,6 +127,27 @@ describe("POST /api/webhook", () => {
     expect(mockFrom).not.toHaveBeenCalled();
   });
 
+  it("does not invoke Postgres rate limiting when signature is invalid or missing", async () => {
+    const rateLimitMod = await import("@/lib/rate-limit");
+    const checkWebhookRateLimitSpy = vi.spyOn(rateLimitMod, "checkWebhookRateLimit");
+
+    const { POST } = await import("./route");
+    const req = new NextRequest("http://localhost:3000/api/webhook", {
+      method: "POST",
+      headers: {
+        "x-github-delivery": "delivery-bad-sig",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": "sha256=forged-bad-signature",
+      },
+      body: JSON.stringify(validPrPayload),
+    });
+
+    const res = await POST(req);
+    expect(res.status).toBe(401);
+    expect(checkWebhookRateLimitSpy).not.toHaveBeenCalled();
+    checkWebhookRateLimitSpy.mockRestore();
+  });
+
   it("rejects request with 401 when signature is invalid", async () => {
     const { POST } = await import("./route");
     const body = JSON.stringify(validPrPayload);
@@ -146,6 +167,27 @@ describe("POST /api/webhook", () => {
     expect(json.status).toBe(401);
     expect(json.error).toBe("unauthorized");
     expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke Postgres rate limiting when signature is invalid or missing", async () => {
+    const rateLimitMod = await import("@/lib/rate-limit");
+    const checkWebhookRateLimitSpy = vi.spyOn(rateLimitMod, "checkWebhookRateLimit");
+
+    const { POST } = await import("./route");
+    const req = new NextRequest("http://localhost:3000/api/webhook", {
+      method: "POST",
+      headers: {
+        "x-github-delivery": "delivery-bad-sig",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": "sha256=forged-bad-signature",
+      },
+      body: JSON.stringify(validPrPayload),
+    });
+
+    const res = await POST(req);
+    expect(res.status).toBe(401);
+    expect(checkWebhookRateLimitSpy).not.toHaveBeenCalled();
+    checkWebhookRateLimitSpy.mockRestore();
   });
 
   it("rejects request with 401 when body has been tampered with", async () => {

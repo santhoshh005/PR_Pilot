@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
+import { ipAddress } from "@vercel/functions";
 import { createServiceClient } from "@/lib/supabase/service";
 import { ApiError } from "@/types";
 
@@ -18,20 +19,44 @@ export const RATE_LIMITS = {
 } as const;
 
 /**
- * Extracts the client IP from standard proxy headers, falling back safely.
+ * Extracts the client IP safely from trusted platform headers.
+ * 1. Checks x-vercel-forwarded-for (set by Vercel platform)
+ * 2. Checks x-real-ip
+ * 3. Checks @vercel/functions ipAddress
+ * 4. Takes the LAST proxy in x-forwarded-for (to prevent attacker from spoofing client IP at index 0)
+ * 5. Falls back to a single shared bucket "unknown-client" to avoid unbounded key creation.
  */
 export function getClientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    const clientIp = forwarded.split(",")[0]?.trim();
-    if (clientIp) return clientIp;
+  const vercelForwarded = request.headers.get("x-vercel-forwarded-for");
+  if (vercelForwarded) {
+    const ip = vercelForwarded.split(",")[0]?.trim();
+    if (ip) return ip;
   }
+
   const realIp = request.headers.get("x-real-ip");
   if (realIp) {
     const trimmed = realIp.trim();
     if (trimmed) return trimmed;
   }
-  return "127.0.0.1";
+
+  try {
+    const vIp = ipAddress(request);
+    if (vIp && typeof vIp === "string" && vIp.trim().length > 0) {
+      return vIp.trim();
+    }
+  } catch {
+    // ignore
+  }
+
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const parts = forwarded.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 0) {
+      return parts[parts.length - 1];
+    }
+  }
+
+  return "unknown-client";
 }
 
 /**
@@ -92,12 +117,7 @@ export async function checkRateLimit(
     if (error) {
       console.warn("[RATE_LIMIT] Limiter RPC error:", error.message);
       if (failOpen) {
-        return {
-          allowed: true,
-          remaining: 1,
-          resetAt: new Date(Date.now() + windowSeconds * 1000),
-          retryAfter: 0,
-        };
+        return checkRateLimitInMemory(key, limit, windowSeconds);
       }
       return {
         allowed: false,
@@ -126,12 +146,7 @@ export async function checkRateLimit(
   } catch (err: unknown) {
     console.warn("[RATE_LIMIT] Unexpected error during rate check:", (err as { message?: string } | null)?.message || err);
     if (failOpen) {
-      return {
-        allowed: true,
-        remaining: 1,
-        resetAt: new Date(Date.now() + windowSeconds * 1000),
-        retryAfter: 0,
-      };
+      return checkRateLimitInMemory(key, limit, windowSeconds);
     }
     return {
       allowed: false,

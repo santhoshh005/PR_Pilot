@@ -3,7 +3,14 @@ import { waitUntil } from "@vercel/functions";
 import { verifyWebhookSignature } from "@/lib/github/webhooks";
 import { processReview } from "@/lib/review/processor";
 import { createServiceClient } from "@/lib/supabase/service";
-import { checkWebhookRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import {
+  checkWebhookRateLimit,
+  checkRateLimitInMemory,
+  getClientIp,
+  hashKey,
+  RATE_LIMITS,
+  rateLimitResponse,
+} from "@/lib/rate-limit";
 import { WebhookPullRequestSchema } from "@/types";
 import type { ApiError } from "@/types";
 
@@ -14,12 +21,7 @@ const HANDLED_PR_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
 export async function POST(request: Request) {
   try {
-    const rateLimit = await checkWebhookRateLimit(request);
-    if (!rateLimit.allowed) {
-      return rateLimitResponse(rateLimit.retryAfter);
-    }
-
-    // Check Content-Length header if present to fail fast on oversized requests
+    // 1. Check Content-Length header if present to fail fast on oversized requests
     const contentLength = request.headers.get("content-length");
     if (contentLength && parseInt(contentLength, 10) > MAX_BODY_BYTES) {
       const errorResponse: ApiError = {
@@ -30,7 +32,7 @@ export async function POST(request: Request) {
       return NextResponse.json(errorResponse, { status: 413 });
     }
 
-    // Read the raw body as text for HMAC verification
+    // 2. Read the raw body as text for HMAC verification
     const rawBody = await request.text();
     if (rawBody.length > MAX_BODY_BYTES) {
       const errorResponse: ApiError = {
@@ -41,11 +43,20 @@ export async function POST(request: Request) {
       return NextResponse.json(errorResponse, { status: 413 });
     }
 
-    const signature = request.headers.get("x-hub-signature-256");
-    const deliveryId = request.headers.get("x-github-delivery");
-    const event = request.headers.get("x-github-event");
+    // 3. Fast volumetric in-memory rate limit check before expensive operations
+    const clientIp = getClientIp(request);
+    const inMemKey = hashKey("webhook_volumetric", clientIp);
+    const inMemCheck = checkRateLimitInMemory(
+      inMemKey,
+      RATE_LIMITS.WEBHOOK.limit * 2,
+      RATE_LIMITS.WEBHOOK.windowSeconds
+    );
+    if (!inMemCheck.allowed) {
+      return rateLimitResponse(inMemCheck.retryAfter);
+    }
 
-    // Validate signature first: reject bad signatures with 401 and no details
+    // 4. Validate HMAC signature before touching the database
+    const signature = request.headers.get("x-hub-signature-256");
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
     const isValid = await verifyWebhookSignature(rawBody, signature, secret);
 
@@ -58,7 +69,9 @@ export async function POST(request: Request) {
       return NextResponse.json(errorResponse, { status: 401 });
     }
 
-    // Check required GitHub headers
+    // 5. Check required GitHub headers
+    const deliveryId = request.headers.get("x-github-delivery");
+    const event = request.headers.get("x-github-event");
     if (!deliveryId || !event) {
       const errorResponse: ApiError = {
         error: "bad_request",
@@ -66,6 +79,12 @@ export async function POST(request: Request) {
         status: 400,
       };
       return NextResponse.json(errorResponse, { status: 400 });
+    }
+
+    // 6. Signature verified: check primary Postgres-backed rate limit
+    const rateLimit = await checkWebhookRateLimit(request);
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.retryAfter);
     }
 
     // Parse JSON payload (never log the payload)
