@@ -143,7 +143,7 @@ This document covers all security threats specific to a GitHub App that processe
 **Threat**: An attacker triggers many PRs rapidly to exhaust Gemini API quota, Supabase bandwidth, or Vercel compute.
 
 **Mitigations**:
-- [ ] Rate-limit `/api/webhook` to 60 requests/minute per IP using an in-memory rate limiter.
+- [ ] Rate-limit `/api/webhook` to 60 requests/minute per IP using the Postgres-backed rate limiter on `rate_limits` table (failing open if database check errors).
 - [ ] The review processor limits concurrent jobs: `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 3`.
 - [ ] If Gemini returns 429, exponential backoff with max 5 retries per job.
 - [ ] Monitor Gemini API usage via dashboard alerts.
@@ -191,5 +191,5 @@ This document covers all security threats specific to a GitHub App that processe
 ## Assumptions
 
 - **Webhook Body Size Limits**: Webhook body size enforcement relies on Vercel's platform-level 4.5 MB serverless request payload limit plus the application-level `Content-Length` header check.
-- **Endpoint Rate Limiting**: In-memory rate limiting across serverless instances is ineffective because serverless functions do not share memory. Rate limiting for webhook and cron endpoints is therefore deferred to Task 13 (Deployment and Observability) where distributed rate limiting with Upstash Redis will be integrated.
+- **Endpoint Rate Limiting**: Distributed rate limiting uses Postgres only via an atomic stored procedure (`check_rate_limit`) on the `rate_limits` table. Protected routes (webhook, cron, auth, dashboard) all fail open (`failOpen: true`) if the rate limiter encounters an error, ensuring high availability in serverless environments.
 

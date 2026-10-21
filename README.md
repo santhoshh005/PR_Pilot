@@ -10,7 +10,7 @@ PRPilot is an autonomous AI-powered GitHub App that automatically reviews pull r
 - **Backend & Database**: Supabase PostgreSQL with strict Row Level Security (RLS) and serverless TypeScript route handlers.
 - **AI Engine**: Google Gemini API via `@google/genai` (structured JSON review output).
 - **GitHub Integration**: Octokit (`@octokit/auth-app`, `@octokit/rest`, `@octokit/webhooks-methods`) for PR diff retrieval and automated review posting.
-- **Hybrid Processing**: Primary path uses Vercel `waitUntil` for immediate analysis; fallback path uses GitHub Actions scheduled cron to recover stale/large jobs.
+- **Hybrid Processing**: Primary path starts processing immediately in the background serverless execution via Vercel `waitUntil` upon receiving a `pull_request` webhook; fallback path uses a scheduled GitHub Actions cron to recover stuck, queued, or deferred jobs (every 30 minutes on private repositories, every 5 minutes on public repositories).
 
 ---
 
@@ -94,14 +94,25 @@ All 9 required environment variables defined in `SECURITY.md`:
 
 ---
 
+## Security Model
+
+- **Signature-verified webhooks with idempotency**: Every webhook from GitHub is verified via HMAC-SHA256 (`X-Hub-Signature-256`) on raw request bytes using constant-time timing-safe comparison, and deduplicated against the `webhook_deliveries` table.
+- **Row-Level Security (RLS) on every table**: RLS is strictly enabled across all application tables (`repos`, `repo_settings`, `review_jobs`, `review_chunks`, `reviews`, `review_comments`, `installations`, `profiles`); authenticated users can only access their own repositories, settings, and reviews.
+- **Anon role has no table access**: The Supabase `anon` role is explicitly revoked from `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on all application tables.
+- **Server-side-only service role**: The privileged `service_role` key is strictly confined to server-side route handlers and background jobs; it is never bundled into client bundles or exposed to the browser.
+- **Postgres-backed rate limiting**: Protected API endpoints enforce rate limits via atomic Postgres RPC (`check_rate_limit`) on the `rate_limits` table, failing open on transient errors to ensure high availability.
+- **Untrusted AI output rendering**: All AI model outputs are treated as untrusted data, validated against a strict Zod schema, sanitized, and rendered strictly as plain text in the UI to prevent XSS. Code suggestions are displayed as plain read-only markdown diffs and are never rendered as one-click apply blocks or executable code.
+
+---
+
 ## Known Limitations
 
+- **Gemini free-tier daily quota**: The live demo runs on the Gemini free tier, so on a busy day reviews may be deferred when the daily request budget is reached. The application tracks daily Gemini calls in the `daily_api_usage` table with a date key formatted as `YYYY-MM-DD` in UTC (`new Date().toISOString().slice(0, 10)`), which resets at midnight UTC (00:00 UTC). Note that Google's own API quota resets on its own schedule (Pacific Time, midnight PT) and may differ from our UTC counter.
 - **Personal-account installations only**: Organization installations are ignored in v1 (`account_type === 'User'` enforced during installation sync).
 - **Head commit deduplication**: Two pull requests within the same repository that share the identical head commit SHA reuse the single review result.
-- **Gemini free-tier daily quota**: On free-tier Gemini API keys, exhausting the daily request or token budget defers pending review jobs until quota resets the following day.
-- **Fail-open rate limiting**: In-memory and database rate limit checks fail open if the database connection encounters an unexpected transient error.
-- **Cron fallback cadence**: Scheduled fallback review processing runs every 30 minutes on private repositories (or every 5 minutes on public repositories) due to GitHub Actions scheduled workflow limitations.
-- **Initial repository sync**: Pull requests opened on repositories before the initial repository sync is triggered (via the "Sync Repositories" button in the dashboard) are not reviewed.
+- **Initial repository sync**: Pull requests opened on repositories before the initial repository sync is triggered (via the "Sync Repositories" button in the dashboard) are not reviewed because un-synced repositories do not yet exist in the `repos` table.
+- **Review trigger and cron fallback cadence**: A `pull_request` webhook starts processing immediately in the background serverless execution via `@vercel/functions` `waitUntil`. The scheduled cron (`POST /api/cron/process-reviews` via `.github/workflows/cron.yml`) is solely a fallback safety net for stuck, queued, or deferred jobs (running every 30 minutes on a private repository, or every 5 minutes on a public one).
+- **Postgres-backed rate limiter (fails open)**: The rate limiter uses Postgres exclusively (`rate_limits` table with atomic RPC `check_rate_limit`) with no external caching dependencies. All protected routes—webhook (`/api/webhook`), fallback cron (`/api/cron/process-reviews`), auth (`/api/auth/callback`, `/api/auth/signout`), and dashboard API (`/api/repos`, `/api/repos/[repoId]/*`)—fail open (`failOpen: true`) if the limiter encounters a database error, preventing service outages during transient database connectivity hiccups.
 
 ---
 

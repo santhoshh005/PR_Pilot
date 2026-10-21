@@ -57,7 +57,7 @@ Every environment variable defined in `.env.local.example` must be populated. Us
 | `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | Direct install URL for the GitHub App (e.g. `https://github.com/apps/<app-slug>/installations/new`). Rendered in dashboard empty state. | No | **[YOU]** |
 
 > [!IMPORTANT]
-> **Initial Repository Sync**: Webhooks for pull requests on repositories not yet synced to the local database are ignored. Pull requests opened before the user triggers the first repository sync (via the "Sync Repositories" button on the dashboard) will not be reviewed. Users must install the app and sync repositories before PR reviews commence.
+> **Initial Repository Sync**: Webhooks for pull requests on repositories not yet synced to the database (`repos` table) are ignored. Pull requests opened before the user triggers the first repository sync (via the "Sync Repositories" button on the dashboard) will not be reviewed. Users must install the app and sync repositories before PR reviews commence.
 
 - [ ] **[YOU]** Run generation command for secrets:
   ```bash

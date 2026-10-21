@@ -22,7 +22,7 @@ graph LR
 | Component | Technology | Purpose |
 |---|---|---|
 | Webhook endpoint | Next.js Route Handler (`POST /api/webhook`) | Receives GitHub `pull_request` events |
-| Review processor | Next.js Route Handler (`POST /api/cron/process-reviews`) | Picks pending reviews from queue, runs AI, posts comments |
+| Review processor | Background task (`waitUntil`) / Route Handler (`POST /api/cron/process-reviews`) | Primary review processing runs in background via `waitUntil` on webhook receipt; cron route serves as fallback for stuck, queued, or deferred jobs |
 | Dashboard UI | Next.js App Router (RSC + client) | Shows repos, reviews, charts |
 | Auth | Supabase Auth with GitHub OAuth provider | Sign in, session management |
 | Database | Supabase Postgres with RLS | All persistent state |
@@ -43,6 +43,7 @@ sequenceDiagram
   GH->>WH: POST pull_request (opened/synchronize)
   WH->>WH: Verify X-Hub-Signature-256
   WH->>DB: Check delivery_id idempotency
+  WH->>DB: Lookup repository in repos table (ignore if unsynced)
   WH->>DB: INSERT review_jobs (status=pending)
   WH-->>GH: 200 OK (< 3s)
 
@@ -109,7 +110,7 @@ For jobs that didn't complete in `waitUntil` (very large PRs, or if the function
 
 ## 5 Key Architecture Decisions
 
-### 1. Queue-in-DB instead of external queue (SQS, Redis, etc.)
+### 1. Queue-in-DB instead of external queue (SQS, RabbitMQ, etc.)
 A `review_jobs` Postgres table with `SELECT ... FOR UPDATE SKIP LOCKED` acts as a job queue. **Why**: Zero additional infrastructure, free tier compatible, transactional with the rest of the data, and `SKIP LOCKED` prevents duplicate processing if cron overlaps.
 
 ### 2. Gemini 3.8 Flash for reviews (not 3.5 Flash or Pro)
