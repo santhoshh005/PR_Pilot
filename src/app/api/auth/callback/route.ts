@@ -3,7 +3,52 @@ import { createUserClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { checkAuthRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
+function getAppOrigin(): string {
+  const envUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (envUrl) {
+    try {
+      return new URL(envUrl).origin;
+    } catch {
+      // ignore invalid URL
+    }
+  }
+  return "http://localhost:3000";
+}
+
+export function sanitizeNextUrl(rawNext: string | null | undefined): string {
+  const defaultPath = "/dashboard";
+  if (!rawNext || typeof rawNext !== "string") {
+    return defaultPath;
+  }
+  const trimmed = rawNext.trim();
+  // Must start with exactly one '/', not '//' or '/\'
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//") || trimmed.startsWith("/\\")) {
+    return defaultPath;
+  }
+  // Must not contain backslashes
+  if (trimmed.includes("\\")) {
+    return defaultPath;
+  }
+  // Must not contain control characters
+  if (/[\x00-\x1F\x7F]/.test(trimmed)) {
+    return defaultPath;
+  }
+  try {
+    const dummyBase = "http://localhost";
+    const parsed = new URL(trimmed, dummyBase);
+    // Ensure origin is not altered and pathname is relative
+    if (parsed.origin !== dummyBase || !parsed.pathname.startsWith("/")) {
+      return defaultPath;
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return defaultPath;
+  }
+}
+
 export async function GET(request: Request) {
+  const appOrigin = getAppOrigin();
+
   const rateLimit = await checkAuthRateLimit(request);
   if (!rateLimit.allowed) {
     return rateLimitResponse(rateLimit.retryAfter);
@@ -12,17 +57,10 @@ export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
   const rawNext = requestUrl.searchParams.get("next");
-
-  // Validate next URL to prevent open redirect vulnerabilities
-  let next = "/dashboard";
-  if (rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//")) {
-    next = rawNext;
-  }
+  const next = sanitizeNextUrl(rawNext);
 
   if (!code) {
-    return NextResponse.redirect(
-      new URL("/error?error=missing_code", request.url)
-    );
+    return NextResponse.redirect(new URL("/error?error=missing_code", appOrigin));
   }
 
   const supabase = await createUserClient();
@@ -31,7 +69,7 @@ export async function GET(request: Request) {
   if (error || !data.user) {
     console.error("Auth exchange error:", error?.message);
     return NextResponse.redirect(
-      new URL("/error?error=auth_exchange_failed", request.url)
+      new URL("/error?error=auth_exchange_failed", appOrigin)
     );
   }
 
@@ -42,7 +80,7 @@ export async function GET(request: Request) {
   let githubUsername = "";
   let avatarUrl: string | null = null;
 
-  // Capture GitHub user data using provider_token if available
+  // 1. Fetch user data directly from GitHub if provider_token is available
   if (session?.provider_token) {
     try {
       const ghResponse = await fetch("https://api.github.com/user", {
@@ -64,40 +102,44 @@ export async function GET(request: Request) {
     }
   }
 
-  // Fall back to Supabase user metadata / identities if needed
+  // 2. Extract strictly from verified provider identity (user.identities) where provider === 'github'
+  // NEVER use unverified user_metadata
   if (!githubUserId || !githubUsername) {
-    const rawId =
-      user.user_metadata?.provider_id ||
-      user.user_metadata?.sub ||
-      user.identities?.find((i) => i.provider === "github")?.identity_data
-        ?.provider_id ||
-      user.identities?.find((i) => i.provider === "github")?.id;
+    const githubIdentity = user.identities?.find((i) => i.provider === "github");
+    if (githubIdentity) {
+      const identityData = (githubIdentity.identity_data || {}) as Record<string, unknown>;
+      const rawId =
+        identityData.provider_id ||
+        githubIdentity.id ||
+        identityData.sub;
 
-    if (rawId) {
-      githubUserId = parseInt(String(rawId), 10);
+      if (rawId) {
+        const parsed = parseInt(String(rawId), 10);
+        if (!isNaN(parsed)) {
+          githubUserId = parsed;
+        }
+      }
+
+      const rawLogin =
+        identityData.user_name ||
+        identityData.login ||
+        identityData.preferred_username;
+
+      if (typeof rawLogin === "string" && rawLogin.trim().length > 0) {
+        githubUsername = rawLogin.trim();
+      }
+
+      if (!avatarUrl && typeof identityData.avatar_url === "string") {
+        avatarUrl = identityData.avatar_url;
+      }
     }
-
-    githubUsername =
-      githubUsername ||
-      user.user_metadata?.user_name ||
-      user.user_metadata?.preferred_username ||
-      user.user_metadata?.name ||
-      user.identities?.find((i) => i.provider === "github")?.identity_data
-        ?.user_name ||
-      "";
-
-    avatarUrl =
-      avatarUrl ||
-      user.user_metadata?.avatar_url ||
-      user.identities?.find((i) => i.provider === "github")?.identity_data
-        ?.avatar_url ||
-      null;
   }
 
+  // If verified GitHub identity is absent, reject immediately
   if (!githubUserId || !githubUsername) {
-    console.error("Missing required GitHub profile information");
+    console.error("Missing required verified GitHub provider identity");
     return NextResponse.redirect(
-      new URL("/error?error=missing_github_profile", request.url)
+      new URL("/error?error=missing_github_profile", appOrigin)
     );
   }
 
@@ -117,16 +159,10 @@ export async function GET(request: Request) {
   if (profileError) {
     console.error("Profile upsert failed:", profileError.message);
     return NextResponse.redirect(
-      new URL("/error?error=profile_creation_failed", request.url)
+      new URL("/error?error=profile_creation_failed", appOrigin)
     );
   }
 
-  const forwardedHost = request.headers.get("x-forwarded-host");
-  const isLocalEnv = process.env.NODE_ENV === "development";
-
-  if (!isLocalEnv && forwardedHost) {
-    return NextResponse.redirect(new URL(next, `https://${forwardedHost}`));
-  }
-
-  return NextResponse.redirect(new URL(next, request.url));
+  // Redirect strictly to appOrigin (never trust Host or X-Forwarded-Host)
+  return NextResponse.redirect(new URL(next, appOrigin));
 }

@@ -565,4 +565,24 @@ runOrSkip("Live Supabase Row Level Security (RLS) Integration Tests", () => {
       "https://example.com/a-new.png"
     );
   });
+
+  it("user A CANNOT modify github_user_id or github_username on their profile", async () => {
+    // Attempt to modify github_user_id
+    const { data: idUpdate, error: idErr } = await clientA
+      .from("profiles")
+      .update({ github_user_id: 99999999 })
+      .eq("id", userAId);
+
+    expect(idErr).not.toBeNull();
+    expect(idUpdate).toBeNull();
+
+    // Attempt to modify github_username
+    const { data: userUpdate, error: userErr } = await clientA
+      .from("profiles")
+      .update({ github_username: "hacked_user_name" })
+      .eq("id", userAId);
+
+    expect(userErr).not.toBeNull();
+    expect(userUpdate).toBeNull();
+  });
 });

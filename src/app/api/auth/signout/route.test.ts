@@ -25,12 +25,65 @@ describe("Sign Out Route Handler (/api/auth/signout)", () => {
     expect((route as Record<string, unknown>).GET).toBeUndefined();
   });
 
-  it("calls signOut on the user client and redirects safely to / with 303", async () => {
+  it("rejects cross-origin requests with 403 forbidden", async () => {
+    const { POST } = await import("./route");
+    const req = new NextRequest("http://localhost:3000/api/auth/signout", {
+      method: "POST",
+      headers: {
+        origin: "https://evil-attacker.com",
+      },
+    });
+
+    const response = await POST(req);
+
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.error).toBe("forbidden");
+    expect(mockSignOut).not.toHaveBeenCalled();
+  });
+
+  it("rejects requests with mismatched Referer when Origin is omitted", async () => {
+    const { POST } = await import("./route");
+    const req = new NextRequest("http://localhost:3000/api/auth/signout", {
+      method: "POST",
+      headers: {
+        referer: "https://evil-attacker.com/malicious-link",
+      },
+    });
+
+    const response = await POST(req);
+
+    expect(response.status).toBe(403);
+    expect(mockSignOut).not.toHaveBeenCalled();
+  });
+
+  it("calls signOut on the user client and redirects safely to / with 303 for same-origin request", async () => {
     mockSignOut.mockResolvedValueOnce({ error: null });
 
     const { POST } = await import("./route");
     const req = new NextRequest("http://localhost:3000/api/auth/signout", {
       method: "POST",
+      headers: {
+        origin: "http://localhost:3000",
+      },
+    });
+
+    const response = await POST(req);
+
+    expect(mockSignOut).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("http://localhost:3000/");
+  });
+
+  it("accepts same-origin Referer when Origin is omitted", async () => {
+    mockSignOut.mockResolvedValueOnce({ error: null });
+
+    const { POST } = await import("./route");
+    const req = new NextRequest("http://localhost:3000/api/auth/signout", {
+      method: "POST",
+      headers: {
+        referer: "http://localhost:3000/dashboard",
+      },
     });
 
     const response = await POST(req);
@@ -51,6 +104,9 @@ describe("Sign Out Route Handler (/api/auth/signout)", () => {
     const { POST } = await import("./route");
     const req = new NextRequest("http://localhost:3000/api/auth/signout", {
       method: "POST",
+      headers: {
+        origin: "http://localhost:3000",
+      },
     });
 
     const response = await POST(req);
@@ -66,6 +122,9 @@ describe("Sign Out Route Handler (/api/auth/signout)", () => {
     const { POST } = await import("./route");
     const req = new NextRequest("http://localhost:3000/api/auth/signout", {
       method: "POST",
+      headers: {
+        origin: "http://localhost:3000",
+      },
     });
 
     const response = await POST(req);

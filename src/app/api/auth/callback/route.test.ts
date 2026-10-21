@@ -61,7 +61,49 @@ describe("Auth Callback Route Handler (GET /api/auth/callback)", () => {
     expect(mockFrom).not.toHaveBeenCalled();
   });
 
-  it("exchanges code for session and upserts profile using service client then redirects to /dashboard", async () => {
+  it("rejects authentication if verified GitHub provider identity is missing (does not trust user_metadata)", async () => {
+    mockExchangeCodeForSession.mockResolvedValueOnce({
+      data: {
+        session: {
+          access_token: "mock-token",
+          provider_token: null,
+          user: {
+            id: "unverified-user-123",
+            // Attacker puts spoofed GitHub details in user_metadata:
+            user_metadata: {
+              provider_id: "99999999",
+              user_name: "spoofed_target_admin",
+            },
+            identities: [], // NO verified github identity
+          },
+        },
+        user: {
+          id: "unverified-user-123",
+          user_metadata: {
+            provider_id: "99999999",
+            user_name: "spoofed_target_admin",
+          },
+          identities: [],
+        },
+      },
+      error: null,
+    });
+
+    const { GET } = await import("./route");
+    const req = new NextRequest(
+      "http://localhost:3000/api/auth/callback?code=unverified_code"
+    );
+
+    const response = await GET(req);
+
+    expect(response.status).toBe(307);
+    const location = response.headers.get("location");
+    expect(location).toContain("/error?error=missing_github_profile");
+    // Database must not have been upserted with unverified metadata
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it("exchanges code for session and upserts profile from verified identities then redirects to /dashboard", async () => {
     mockExchangeCodeForSession.mockResolvedValueOnce({
       data: {
         session: {
@@ -69,20 +111,32 @@ describe("Auth Callback Route Handler (GET /api/auth/callback)", () => {
           provider_token: null,
           user: {
             id: "user-uuid-123",
-            user_metadata: {
-              provider_id: "12345678",
-              user_name: "testuser",
-              avatar_url: "https://github.com/testuser.png",
-            },
+            identities: [
+              {
+                provider: "github",
+                id: "12345678",
+                identity_data: {
+                  provider_id: "12345678",
+                  user_name: "testuser",
+                  avatar_url: "https://github.com/testuser.png",
+                },
+              },
+            ],
           },
         },
         user: {
           id: "user-uuid-123",
-          user_metadata: {
-            provider_id: "12345678",
-            user_name: "testuser",
-            avatar_url: "https://github.com/testuser.png",
-          },
+          identities: [
+            {
+              provider: "github",
+              id: "12345678",
+              identity_data: {
+                provider_id: "12345678",
+                user_name: "testuser",
+                avatar_url: "https://github.com/testuser.png",
+              },
+            },
+          ],
         },
       },
       error: null,
@@ -119,20 +173,30 @@ describe("Auth Callback Route Handler (GET /api/auth/callback)", () => {
         session: {
           user: {
             id: "user-uuid-123",
-            user_metadata: {
-              provider_id: "12345678",
-              user_name: "testuser",
-              avatar_url: "https://github.com/testuser.png",
-            },
+            identities: [
+              {
+                provider: "github",
+                id: "12345678",
+                identity_data: {
+                  provider_id: "12345678",
+                  user_name: "testuser",
+                },
+              },
+            ],
           },
         },
         user: {
           id: "user-uuid-123",
-          user_metadata: {
-            provider_id: "12345678",
-            user_name: "testuser",
-            avatar_url: "https://github.com/testuser.png",
-          },
+          identities: [
+            {
+              provider: "github",
+              id: "12345678",
+              identity_data: {
+                provider_id: "12345678",
+                user_name: "testuser",
+              },
+            },
+          ],
         },
       },
       error: null,
@@ -141,35 +205,108 @@ describe("Auth Callback Route Handler (GET /api/auth/callback)", () => {
 
     const { GET } = await import("./route");
     const req = new NextRequest(
-      "http://localhost:3000/api/auth/callback?code=good_code&next=/settings"
+      "http://localhost:3000/api/auth/callback?code=good_code&next=/settings?tab=general"
     );
 
     const response = await GET(req);
 
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe(
-      "http://localhost:3000/settings"
+      "http://localhost:3000/settings?tab=general"
     );
   });
 
-  it("ignores unsafe external 'next' parameter and falls back to /dashboard", async () => {
+  it("ignores unsafe external and malformed 'next' parameters and falls back to /dashboard", async () => {
+    const maliciousCases = [
+      "https://attacker.com",
+      "//attacker.com",
+      "/\\attacker.com",
+      "\\attacker.com",
+      "/settings\\evil.com",
+      "javascript:alert(1)",
+    ];
+
+    const { GET } = await import("./route");
+
+    for (const badNext of maliciousCases) {
+      mockExchangeCodeForSession.mockResolvedValueOnce({
+        data: {
+          session: {
+            user: {
+              id: "user-uuid-123",
+              identities: [
+                {
+                  provider: "github",
+                  id: "12345678",
+                  identity_data: {
+                    provider_id: "12345678",
+                    user_name: "testuser",
+                  },
+                },
+              ],
+            },
+          },
+          user: {
+            id: "user-uuid-123",
+            identities: [
+              {
+                provider: "github",
+                id: "12345678",
+                identity_data: {
+                  provider_id: "12345678",
+                  user_name: "testuser",
+                },
+              },
+            ],
+          },
+        },
+        error: null,
+      });
+      mockUpsert.mockResolvedValueOnce({ error: null });
+
+      const req = new NextRequest(
+        `http://localhost:3000/api/auth/callback?code=good_code&next=${encodeURIComponent(badNext)}`
+      );
+
+      const response = await GET(req);
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get("location")).toBe(
+        "http://localhost:3000/dashboard"
+      );
+    }
+  });
+
+  it("ignores X-Forwarded-Host header and always redirects to trusted NEXT_PUBLIC_APP_URL origin", async () => {
     mockExchangeCodeForSession.mockResolvedValueOnce({
       data: {
         session: {
           user: {
             id: "user-uuid-123",
-            user_metadata: {
-              provider_id: "12345678",
-              user_name: "testuser",
-            },
+            identities: [
+              {
+                provider: "github",
+                id: "12345678",
+                identity_data: {
+                  provider_id: "12345678",
+                  user_name: "testuser",
+                },
+              },
+            ],
           },
         },
         user: {
           id: "user-uuid-123",
-          user_metadata: {
-            provider_id: "12345678",
-            user_name: "testuser",
-          },
+          identities: [
+            {
+              provider: "github",
+              id: "12345678",
+              identity_data: {
+                provider_id: "12345678",
+                user_name: "testuser",
+              },
+            },
+          ],
         },
       },
       error: null,
@@ -178,15 +315,21 @@ describe("Auth Callback Route Handler (GET /api/auth/callback)", () => {
 
     const { GET } = await import("./route");
     const req = new NextRequest(
-      "http://localhost:3000/api/auth/callback?code=good_code&next=https://attacker.com"
+      "http://localhost:3000/api/auth/callback?code=good_code",
+      {
+        headers: {
+          "x-forwarded-host": "evil-phishing-site.com",
+          host: "evil-phishing-site.com",
+        },
+      }
     );
 
     const response = await GET(req);
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe(
-      "http://localhost:3000/dashboard"
-    );
+    const location = response.headers.get("location");
+    expect(location).toBe("http://localhost:3000/dashboard");
+    expect(location).not.toContain("evil-phishing-site.com");
   });
 
   it("fetches user data with provider_token if present", async () => {
@@ -196,12 +339,22 @@ describe("Auth Callback Route Handler (GET /api/auth/callback)", () => {
           provider_token: "gho_mock_provider_token",
           user: {
             id: "user-uuid-456",
-            user_metadata: {},
+            identities: [
+              {
+                provider: "github",
+                id: "98765432",
+              },
+            ],
           },
         },
         user: {
           id: "user-uuid-456",
-          user_metadata: {},
+          identities: [
+            {
+              provider: "github",
+              id: "98765432",
+            },
+          ],
         },
       },
       error: null,

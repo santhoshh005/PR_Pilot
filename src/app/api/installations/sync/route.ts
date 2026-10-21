@@ -79,21 +79,13 @@ export async function POST(request?: Request) {
       page++;
     }
 
-    // 4. Filter only installations whose account matches the signed-in user (personal accounts only)
+    // 4. Filter only installations whose account matches the signed-in user (personal accounts only, strict account.id match)
     const userInstallations = allInstallations.filter((inst) => {
       const isUserType =
         inst.target_type === "User" || inst.account?.type === "User";
-      if (!isUserType || !inst.account) return false;
+      if (!isUserType || !inst.account || inst.account.id === undefined) return false;
 
-      const idMatch =
-        inst.account.id !== undefined &&
-        Number(inst.account.id) === Number(profile.github_user_id);
-
-      const loginMatch =
-        Boolean(inst.account.login) &&
-        inst.account.login!.toLowerCase() === profile.github_username.toLowerCase();
-
-      return idMatch || loginMatch;
+      return Number(inst.account.id) === Number(profile.github_user_id);
     });
 
     // 5. Clean up installations that GitHub no longer returns for this user
@@ -112,10 +104,25 @@ export async function POST(request?: Request) {
       }
     }
 
+    let totalSyncedInstallations = 0;
     let totalSyncedRepos = 0;
 
     // 6. For each valid personal installation, upsert installation and sync its repositories
     for (const inst of userInstallations) {
+      // Guard against taking over an installation already registered by another user
+      const { data: existingDbInst } = await serviceClient
+        .from("installations")
+        .select("id, owner_id")
+        .eq("installation_id", inst.id)
+        .maybeSingle();
+
+      if (existingDbInst && existingDbInst.owner_id !== profile.id) {
+        console.warn(
+          `[INSTALLATIONS_SYNC] Installation ${inst.id} belongs to owner ${existingDbInst.owner_id}, refusing takeover by ${profile.id}`
+        );
+        continue;
+      }
+
       // SERVICE_ROLE: upsert installation row
       const { data: dbInst, error: instUpsertErr } = await serviceClient
         .from("installations")
@@ -139,6 +146,8 @@ export async function POST(request?: Request) {
         );
         continue;
       }
+
+      totalSyncedInstallations++;
 
       // 7. Fetch repos accessible to this installation (paginated)
       const instOctokit = getInstallationOctokit(inst.id);
@@ -222,7 +231,7 @@ export async function POST(request?: Request) {
 
     return NextResponse.json(
       {
-        installations: userInstallations.length,
+        installations: totalSyncedInstallations,
         repos: totalSyncedRepos,
       },
       { status: 200 }

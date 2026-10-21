@@ -510,6 +510,84 @@ describe("POST /api/installations/sync", () => {
     expect(mockDb.installations.length).toBe(0);
     expect(mockDb.repos.length).toBe(0);
   });
+
+  it("strictly matches account.id and rejects login-only match when id differs", async () => {
+    // GitHub returns an installation whose login matches userA, but id belongs to another account
+    mockListInstallations.mockResolvedValueOnce({
+      data: [
+        {
+          id: 801,
+          target_type: "User",
+          account: {
+            id: 9999, // different id
+            login: userAProfile.github_username, // same login
+            type: "User",
+          },
+        },
+      ],
+    });
+
+    currentUser = { id: userAProfile.id };
+
+    const { POST } = await import("./route");
+    const res = await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body).toEqual({ installations: 0, repos: 0 });
+    expect(mockDb.installations.length).toBe(0);
+  });
+
+  it("skips installation and never reassigns owner if existingDbInst belongs to a different owner", async () => {
+    // Existing DB installation owned by User B
+    mockDb.installations.push({
+      id: "inst-b-uuid",
+      installation_id: 901,
+      owner_id: userBProfile.id,
+      account_login: "user-b",
+      account_type: "User",
+    });
+    // Existing repo belonging to User B's installation
+    mockDb.repos.push({
+      id: "repo-b-uuid",
+      installation_id: "inst-b-uuid",
+      github_repo_id: 5555,
+      owner: "user-b",
+      name: "repo-b",
+      full_name: "user-b/repo-b",
+      is_active: true,
+      updated_at: new Date().toISOString(),
+    });
+
+    // GitHub returns installation 901 with user A's account id
+    mockListInstallations.mockResolvedValueOnce({
+      data: [
+        {
+          id: 901,
+          target_type: "User",
+          account: {
+            id: userAProfile.github_user_id,
+            login: userAProfile.github_username,
+            type: "User",
+          },
+        },
+      ],
+    });
+
+    currentUser = { id: userAProfile.id };
+
+    const { POST } = await import("./route");
+    const res = await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    // Takeover refused: 0 installations synced, existing installation still owned by user B
+    expect(body.installations).toBe(0);
+    const dbInst = mockDb.installations.find((i) => i.installation_id === 901);
+    expect(dbInst?.owner_id).toBe(userBProfile.id);
+    // Repos under user B's installation must not be deleted
+    expect(mockDb.repos.some((r) => r.github_repo_id === 5555)).toBe(true);
+  });
 });
 
 describe("Live Supabase Integration - Sync Idempotency", () => {
