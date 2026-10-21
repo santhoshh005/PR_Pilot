@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "type-check": "tsc --noEmit",
     "e2e": "playwright test"
   },
