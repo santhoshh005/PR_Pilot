@@ -87,7 +87,8 @@ After clicking **Create GitHub App**:
 | `NEXT_PUBLIC_APP_URL` | **Build-Time** (inlined into JS bundle) | No | `https://<your-app>.vercel.app` (no trailing slash) | **`[YOU]`** |
 | `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | **Build-Time** (inlined into JS bundle) | No | `https://github.com/apps/<app-slug>/installations/new` | **`[YOU]`** |
 | `GITHUB_APP_ID` | **Runtime-Only** (Serverless functions) | No | Numeric ID (e.g. `123456`) | **`[YOU]`** |
-| `GITHUB_PRIVATE_KEY` | **Runtime-Only** (Serverless functions) | **Yes** | Multiline PEM or escaped single-line `\n` (see below) | **`[YOU]`** |
+| `GITHUB_PRIVATE_KEY_BASE64` | **Runtime-Only** (Serverless functions) | **Yes** | **Recommended**: Base64 of whole `.pem` file; pastes cleanly into Vercel without newline loss | **`[YOU]`** |
+| `GITHUB_PRIVATE_KEY` | **Runtime-Only** (Serverless functions) | **Yes** | Supported alternative: Multiline PEM or escaped single-line `\n` | **`[YOU]`** |
 | `GITHUB_WEBHOOK_SECRET` | **Runtime-Only** (Serverless functions) | **Yes** | 32-byte hex string from `openssl rand -hex 32` | **`[YOU]`** |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Runtime-Only** (Serverless functions) | **Yes** | Supabase service-role secret key (bypasses RLS on server) | **`[YOU]`** |
 | `GEMINI_API_KEY` | **Runtime-Only** (Serverless functions) | **Yes** | Google AI Studio API key | **`[YOU]`** |
@@ -100,10 +101,13 @@ After clicking **Create GitHub App**:
 ### Build Tolerance & Secrets
 - **Build Tolerance**: Next.js (`pnpm build`) compiles cleanly **even if GitHub credentials (`GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`) are not yet set**. Octokit client initialization is strictly lazy inside request handlers (`getAppOctokit`, `getInstallationOctokit`), and all API routes and dashboard pages are dynamically evaluated at request time.
 - **Client Bundle Inlining**: Next.js inlines all `NEXT_PUBLIC_*` variables into the static JavaScript chunks during the build step. If `NEXT_PUBLIC_APP_URL` or `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` is added or changed in Vercel Project Settings, **you must trigger a Redeploy** for the browser to receive the updated value.
-- **Private Key Format Handling**: In `src/lib/github/app.ts`, the private key is normalized using `.replace(/\\n/g, "\n")`. It accommodates:
-  1. Standard multiline PEM string directly pasted into the Vercel Dashboard textarea.
-  2. Single-line string containing literal `\n` characters (with or without surrounding double quotes).
-  3. Either environment variable name is recognized: `GITHUB_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY`.
+- **Private Key Format Handling**: In `src/lib/github/app.ts`, private key loading supports multiple robust formats:
+  1. **`GITHUB_PRIVATE_KEY_BASE64` (RECOMMENDED)**: Base64-encoded string of the entire `.pem` file. This is the most reliable approach for Vercel's web UI because base64 strings contain no internal line breaks, quotation ambiguities, or multi-line pasting issues. Copy directly to clipboard on Windows (PowerShell):
+     ```powershell
+     [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\key.pem")) | Set-Clipboard
+     ```
+  2. **`GITHUB_PRIVATE_KEY`**: Standard multiline PEM string, or single-line string with literal `\n` or space-collapsed lines (wrapped in quotes or unquoted).
+  3. **Automatic Normalisation & Conversion**: `loadPrivateKey()` strips wrapping quotes, normalises literal `\n`, re-chunks collapsed base64 payloads to 64 characters per line between headers, validates that the key is an RSA key using Node's `node:crypto`, and re-exports it as canonical PKCS#8 PEM so that `@octokit/auth-app` and Web Crypto DER parsing sign JWTs without ASN.1 tag errors.
 
 ---
 
@@ -161,7 +165,8 @@ Follow this exact sequence to deploy without circular URL or credential dependen
 ### Step 6: Add GitHub Credentials to Vercel & Redeploy
 - [ ] **`[YOU]`** In Vercel > **Project Settings > Environment Variables**, add:
   - `GITHUB_APP_ID`: `<numeric-app-id>`
-  - `GITHUB_PRIVATE_KEY`: `<pem-file-contents>`
+  - `GITHUB_PRIVATE_KEY_BASE64`: **(Recommended)** Base64 of the `.pem` file copied via PowerShell (`[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\key.pem")) | Set-Clipboard`)
+  - *(Alternatively, `GITHUB_PRIVATE_KEY` with raw PEM contents is also supported)*
   - `GITHUB_WEBHOOK_SECRET`: `<webhook-secret>`
   - `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL`: `https://github.com/apps/<app-slug>/installations/new`
 - [ ] **`[YOU]`** Go to Vercel > **Deployments**, click the three dots on your latest deployment, and click **Redeploy** (with build cache cleared if needed) so `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` is inlined into the frontend bundle.

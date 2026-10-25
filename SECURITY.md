@@ -36,10 +36,15 @@ This document covers all security threats specific to a GitHub App that processe
 **Threat**: The GitHub App's private key (`.pem`) is exposed in code, logs, or environment variable dumps.
 
 **Mitigations**:
-- [ ] Store the private key as a Vercel environment variable (`GITHUB_PRIVATE_KEY`), not in the repo.
-- [ ] Never log the private key or any token. Use structured logging that explicitly excludes sensitive fields.
+- [ ] Store the private key as a Vercel environment variable, not in the repo.
+- [ ] **Recommended configuration**: Use `GITHUB_PRIVATE_KEY_BASE64` containing the base64-encoded `.pem` file to completely avoid line-break stripping, trailing whitespace corruption, or quote-escaping errors in Vercel's UI. On Windows (PowerShell):
+  ```powershell
+  [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\key.pem")) | Set-Clipboard
+  ```
+- [ ] `GITHUB_PRIVATE_KEY` and `GITHUB_APP_PRIVATE_KEY` remain fully supported and are automatically normalised (unwrapping quotes, converting `\n`, re-chunking collapsed lines, and converting PKCS#1 to PKCS#8).
+- [ ] Never log the private key, token, or error stack containing key material. In `src/lib/github/app.ts` and `/api/installations/sync`, catch blocks log only error name, message (`GITHUB_KEY_*`), and status without leaking key contents or filesystem paths.
 - [ ] The `.pem` file must be in `.gitignore`.
-- [ ] Use `@octokit/auth-app` which handles JWT creation internally — never construct JWTs manually.
+- [ ] Use `@octokit/auth-app` with canonical PKCS#8 PEM re-exported by `createPrivateKey()` for reliable Web Crypto DER signature generation.
 
 ---
 

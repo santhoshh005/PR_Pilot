@@ -86,7 +86,8 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
 | `NEXT_PUBLIC_APP_URL` | **Build-Time** (inlined) | Vercel / `.env.local` | No | Base application URL (`http://localhost:3000` or `https://<app>.vercel.app`). |
 | `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | **Build-Time** (inlined) | Vercel / `.env.local` | No | Optional direct URL to install GitHub App, displayed in dashboard empty state. |
 | `GITHUB_APP_ID` | **Runtime-Only** | Vercel / `.env.local` | No | Numeric ID of the GitHub App. |
-| `GITHUB_PRIVATE_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | RSA private key (.pem) from GitHub App (multiline or `\n` escaped). |
+| `GITHUB_PRIVATE_KEY_BASE64` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | **Recommended**: Base64-encoded private key (.pem) to eliminate newline escaping issues in Vercel. |
+| `GITHUB_PRIVATE_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Supported alternative: RSA private key (.pem) from GitHub App (multiline or `\n` escaped). |
 | `GITHUB_WEBHOOK_SECRET` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Random 32+ character HMAC secret for webhook signature verification. |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Supabase service-role secret key (bypasses RLS on server only). |
 | `GEMINI_API_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Google Gemini API key from Google AI Studio. |
@@ -98,6 +99,11 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
 
 > [!NOTE]
 > Next.js inlines `NEXT_PUBLIC_*` variables into client-side JavaScript bundles at build time. Changing any `NEXT_PUBLIC_*` variable in Vercel Project Settings requires triggering a **Redeploy** for changes to take effect in the browser. Server-only runtime variables are read on-demand by Serverless Functions. Build tolerance allows `next build` to complete successfully even when GitHub runtime credentials are unset during initial provisioning.
+>
+> **Recommended Private Key Setup**: To avoid newline stripping or quote escaping issues in Vercel's web UI, set `GITHUB_PRIVATE_KEY_BASE64` using base64. Generate it directly to clipboard on Windows (PowerShell):
+> ```powershell
+> [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\key.pem")) | Set-Clipboard
+> ```
 
 ---
 
