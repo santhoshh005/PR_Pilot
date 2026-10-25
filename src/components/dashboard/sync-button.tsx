@@ -19,13 +19,7 @@ export function SyncButton({
   className,
   children,
 }: SyncButtonProps) {
-  let router: { refresh: () => void } | null = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    router = useRouter();
-  } catch {
-    router = null;
-  }
+  const router = useRouter();
 
   const [state, setState] = React.useState<SyncState>("idle");
   const [feedbackMessage, setFeedbackMessage] = React.useState<string | null>(null);
@@ -52,6 +46,9 @@ export function SyncButton({
       } else if (res.status === 429) {
         setState("rate_limited");
         setFeedbackMessage("Rate limit exceeded. Please try again later.");
+      } else if (res.status === 503) {
+        setState("error");
+        setFeedbackMessage("The GitHub App is not configured correctly. Please contact the site owner.");
       } else {
         setState("error");
         setFeedbackMessage("Failed to sync repositories. Please try again.");
@@ -72,9 +69,11 @@ export function SyncButton({
         size={size}
         className={className}
         disabled={isLoading}
+        aria-busy={isLoading}
         onClick={handleSync}
       >
         <svg
+          aria-hidden="true"
           className={`h-3.5 w-3.5 mr-1.5 ${isLoading ? "animate-spin" : ""}`}
           fill="none"
           stroke="currentColor"

@@ -74,6 +74,28 @@ describe("SyncButton Component", { timeout: 15000 }, () => {
     expect(screen.queryByText(/Raw server rate limit text/i)).toBeNull();
   });
 
+  it("displays configuration error message when endpoint returns 503 without leaking raw server text", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "github_app_not_configured", message: "Raw server key error" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    render(<SyncButton />);
+    const button = screen.getByRole("button", { name: /Sync Repositories/i });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/The GitHub App is not configured correctly\. Please contact the site owner\./i)
+      ).toBeDefined();
+    });
+
+    // Ensure raw error text from server is NOT displayed
+    expect(screen.queryByText(/Raw server key error/i)).toBeNull();
+  });
+
   it("displays generic error message on 500 error or network failure without leaking raw server text", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ error: "internal", message: "FATAL internal DB schema dump" }), {

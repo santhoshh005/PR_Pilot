@@ -8,6 +8,7 @@ const mockRedirect = vi.fn();
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => mockRedirect(url),
   usePathname: () => "/dashboard",
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
