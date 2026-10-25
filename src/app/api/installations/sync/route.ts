@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createUserClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getAppOctokit, getInstallationOctokit } from "@/lib/github/app";
+import { checkDashboardRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { ApiError } from "@/types";
 
 interface GitHubAccount {
@@ -42,6 +43,12 @@ export async function POST(request?: Request) {
         status: 401,
       };
       return NextResponse.json(errorResponse, { status: 401 });
+    }
+
+    // Rate limit per authenticated user
+    const rateLimit = await checkDashboardRateLimit(user.id);
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.retryAfter);
     }
 
     // 2. Fetch user's profile to obtain their GitHub identity
@@ -95,13 +102,15 @@ export async function POST(request?: Request) {
       .eq("owner_id", profile.id);
 
     const activeGitHubInstIds = new Set(userInstallations.map((i) => i.id));
-    for (const existingInst of existingUserInstallations || []) {
-      if (!activeGitHubInstIds.has(Number(existingInst.installation_id))) {
-        await serviceClient
-          .from("installations")
-          .delete()
-          .eq("id", existingInst.id);
-      }
+    const instIdsToDelete = (existingUserInstallations || [])
+      .filter((inst) => !activeGitHubInstIds.has(Number(inst.installation_id)))
+      .map((inst) => inst.id);
+
+    if (instIdsToDelete.length > 0) {
+      await serviceClient
+        .from("installations")
+        .delete()
+        .in("id", instIdsToDelete);
     }
 
     let totalSyncedInstallations = 0;
@@ -179,34 +188,39 @@ export async function POST(request?: Request) {
       );
 
       const activeGitHubRepoIds = new Set(gitHubRepos.map((r) => r.id));
-      for (const existingRepo of existingRepos || []) {
-        if (!activeGitHubRepoIds.has(Number(existingRepo.github_repo_id))) {
-          await serviceClient
-            .from("repos")
-            .delete()
-            .eq("id", existingRepo.id);
-        }
+      const repoIdsToDelete = (existingRepos || [])
+        .filter((r) => !activeGitHubRepoIds.has(Number(r.github_repo_id)))
+        .map((r) => r.id);
+
+      if (repoIdsToDelete.length > 0) {
+        await serviceClient
+          .from("repos")
+          .delete()
+          .in("id", repoIdsToDelete);
       }
 
       // 9. Upsert repos and create default repo_settings
       for (const repo of gitHubRepos) {
         const isNewRepo = !existingRepoGithubIds.has(Number(repo.id));
 
+        const repoData: Record<string, unknown> = {
+          installation_id: dbInst.id,
+          github_repo_id: repo.id,
+          owner: repo.owner.login,
+          name: repo.name,
+          full_name: repo.full_name,
+          updated_at: new Date().toISOString(),
+        };
+
+        // Only default is_active to true for brand-new repositories so we don't overwrite user preferences
+        if (isNewRepo) {
+          repoData.is_active = true;
+        }
+
         // SERVICE_ROLE: upsert repo row
         const { data: dbRepo, error: repoUpsertErr } = await serviceClient
           .from("repos")
-          .upsert(
-            {
-              installation_id: dbInst.id,
-              github_repo_id: repo.id,
-              owner: repo.owner.login,
-              name: repo.name,
-              full_name: repo.full_name,
-              is_active: true,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "github_repo_id" }
-          )
+          .upsert(repoData, { onConflict: "github_repo_id" })
           .select("id, github_repo_id")
           .single();
 
@@ -301,9 +315,37 @@ export async function POST(request?: Request) {
       { status: 200 }
     );
   } catch (error: unknown) {
-    const err = error as { status?: number; message?: string } | null;
-    if (err?.status === 403 || err?.status === 429) {
-      console.warn("[INSTALLATIONS_SYNC] GitHub rate limit encountered:", err?.message);
+    const err = error as { status?: number; message?: string; name?: string } | null;
+    const errMessage = err?.message || "";
+    const errName = err?.name || "Error";
+    const errStatus = err?.status;
+
+    if (
+      errMessage === "GITHUB_KEY_MISSING" ||
+      errMessage === "GITHUB_KEY_INVALID" ||
+      errMessage.startsWith("GITHUB_KEY_") ||
+      errMessage === "GITHUB_APP_ID_MISSING" ||
+      errMessage.startsWith("GITHUB_APP_ID")
+    ) {
+      console.error("[INSTALLATIONS_SYNC] GitHub App configuration error:", {
+        name: errName,
+        message: errMessage,
+        status: 503,
+      });
+      const errorResponse: ApiError = {
+        error: "github_app_not_configured",
+        message: "The GitHub App is not configured correctly. Please contact the site owner.",
+        status: 503,
+      };
+      return NextResponse.json(errorResponse, { status: 503 });
+    }
+
+    if (errStatus === 403 || errStatus === 429) {
+      console.warn("[INSTALLATIONS_SYNC] GitHub rate limit encountered:", {
+        name: errName,
+        message: errMessage,
+        status: errStatus,
+      });
       const errorResponse: ApiError = {
         error: "rate_limit_exceeded",
         message: "GitHub rate limit exceeded. Please try again later.",
@@ -312,7 +354,11 @@ export async function POST(request?: Request) {
       return NextResponse.json(errorResponse, { status: 429 });
     }
 
-    console.error("[INSTALLATIONS_SYNC] Unexpected error:", error);
+    console.error("[INSTALLATIONS_SYNC] Unexpected error:", {
+      name: errName,
+      message: errMessage,
+      status: errStatus || 500,
+    });
     const errorResponse: ApiError = {
       error: "internal",
       message: "Failed to sync installations",

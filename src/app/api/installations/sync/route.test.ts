@@ -87,6 +87,10 @@ function createMockServiceClient() {
           filters.push((row) => row[field] === value);
           return chain;
         },
+        in: (field: string, values: unknown[]) => {
+          filters.push((row) => values.includes(row[field]));
+          return chain;
+        },
         single: async () => {
           const rows = currentTable.filter((row) =>
             filters.every((f) => f(row))
@@ -614,6 +618,87 @@ describe("POST /api/installations/sync", () => {
     expect(dbInst?.owner_id).toBe(userBProfile.id);
     // Repos under user B's installation must not be deleted
     expect(mockDb.repos.some((r) => r.github_repo_id === 5555)).toBe(true);
+  });
+
+  it("returns HTTP 503 with github_app_not_configured when private key is missing or invalid", async () => {
+    const { getAppOctokit } = await import("@/lib/github/app");
+    vi.mocked(getAppOctokit).mockImplementationOnce(() => {
+      throw new Error("GITHUB_KEY_MISSING");
+    });
+
+    const { POST } = await import("./route");
+    const res = await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body).toEqual({
+      error: "github_app_not_configured",
+      message: "The GitHub App is not configured correctly. Please contact the site owner.",
+      status: 503,
+    });
+  });
+
+  it("returns HTTP 503 with github_app_not_configured when GITHUB_APP_ID is missing", async () => {
+    const { getAppOctokit } = await import("@/lib/github/app");
+    vi.mocked(getAppOctokit).mockImplementationOnce(() => {
+      throw new Error("GITHUB_APP_ID_MISSING");
+    });
+
+    const { POST } = await import("./route");
+    const res = await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body).toEqual({
+      error: "github_app_not_configured",
+      message: "The GitHub App is not configured correctly. Please contact the site owner.",
+      status: 503,
+    });
+  });
+
+  it("preserves is_active = false on existing repositories during resync", async () => {
+    // 1. Initial sync
+    mockListInstallations.mockResolvedValue({
+      data: [
+        {
+          id: 501,
+          target_type: "User",
+          account: {
+            id: userAProfile.github_user_id,
+            login: userAProfile.github_username,
+            type: "User",
+          },
+        },
+      ],
+    });
+
+    mockListReposAccessibleToInstallation.mockResolvedValue({
+      data: {
+        total_count: 1,
+        repositories: [
+          {
+            id: 1001,
+            name: "repo-alpha",
+            full_name: "user-a/repo-alpha",
+            owner: { login: "user-a" },
+          },
+        ],
+      },
+    });
+
+    const { POST } = await import("./route");
+    await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+    expect(mockDb.repos.length).toBe(1);
+    expect(mockDb.repos[0].is_active).toBe(true);
+
+    // User disables the repository in settings
+    mockDb.repos[0].is_active = false;
+
+    // 2. Re-run sync
+    const res2 = await POST(new Request("http://localhost:3000/api/installations/sync", { method: "POST" }));
+    expect(res2.status).toBe(200);
+
+    // Verify is_active was NOT overwritten back to true
+    expect(mockDb.repos.length).toBe(1);
+    expect(mockDb.repos[0].is_active).toBe(false);
   });
 
   describe("Open PR Backfill on First Sync", () => {
