@@ -53,6 +53,59 @@ describe("fetchDiff", () => {
       /diff/i
     );
   });
+
+  it("formats simulated 403 error with accepted permissions and request_id without secrets", async () => {
+    const errorWithHeaders = Object.assign(
+      new Error("Resource not accessible by integration"),
+      {
+        status: 403,
+        response: {
+          status: 403,
+          headers: {
+            "x-accepted-github-permissions": "pull_requests=read",
+            "x-github-request-id": "REQ-123-ABC",
+          },
+        },
+      }
+    );
+
+    const mockOctokit: DiffFetcherClient = {
+      rest: {
+        pulls: {
+          get: vi.fn().mockRejectedValue(errorWithHeaders),
+        },
+      },
+    };
+
+    await expect(fetchDiff(mockOctokit, "owner", "repo", 1)).rejects.toThrowError(
+      "GitHub 403 at pulls.get diff: accepted=[pull_requests=read], request_id=REQ-123-ABC"
+    );
+  });
+
+  it("handles missing headers on 403 gracefully with 'none'", async () => {
+    const errorWithoutHeaders = Object.assign(
+      new Error("Resource not accessible by integration"),
+      {
+        status: 403,
+        response: {
+          status: 403,
+          headers: {},
+        },
+      }
+    );
+
+    const mockOctokit: DiffFetcherClient = {
+      rest: {
+        pulls: {
+          get: vi.fn().mockRejectedValue(errorWithoutHeaders),
+        },
+      },
+    };
+
+    await expect(fetchDiff(mockOctokit, "owner", "repo", 1)).rejects.toThrowError(
+      "GitHub 403 at pulls.get diff: accepted=[none], request_id=none"
+    );
+  });
 });
 
 describe("parseDiff - fixture parsing", () => {

@@ -1,5 +1,6 @@
 import picomatch from "picomatch";
 import { DiffChunk, CONFIG } from "@/types";
+import { formatGitHubError, isGitHubAuthOrPermissionError } from "@/lib/github/app";
 
 export interface DiffFetcherClient {
   rest: {
@@ -63,20 +64,27 @@ export async function fetchDiff(
   repo: string,
   prNumber: number
 ): Promise<string> {
-  const response = await octokit.rest.pulls.get({
-    owner,
-    repo,
-    pull_number: prNumber,
-    mediaType: {
-      format: "diff",
-    },
-  });
+  try {
+    const response = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: prNumber,
+      mediaType: {
+        format: "diff",
+      },
+    });
 
-  if (typeof response.data !== "string") {
-    throw new Error("Expected diff format response from GitHub API");
+    if (typeof response.data !== "string") {
+      throw new Error("Expected diff format response from GitHub API");
+    }
+
+    return response.data;
+  } catch (err: unknown) {
+    if (isGitHubAuthOrPermissionError(err)) {
+      throw new Error(formatGitHubError(err, "pulls.get diff"));
+    }
+    throw err;
   }
-
-  return response.data;
 }
 
 const MAX_IGNORED_PATTERNS = 100;

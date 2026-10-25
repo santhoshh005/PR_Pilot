@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import crypto from "node:crypto";
-import { getInstallationOctokit, getAppOctokit, loadPrivateKey } from "./app";
+import {
+  getInstallationOctokit,
+  getAppOctokit,
+  loadPrivateKey,
+  formatGitHubError,
+  getHeaderValue,
+  getOperationLabel,
+  isGitHubAuthOrPermissionError,
+  attachDiagnosticsHooks,
+} from "./app";
 import { Octokit } from "@octokit/rest";
 import { createAppAuth } from "@octokit/auth-app";
 
@@ -8,6 +17,10 @@ vi.mock("@octokit/rest", () => {
   const MockOctokit = vi.fn().mockImplementation(function (this: unknown, options: unknown) {
     return {
       options,
+      hook: {
+        wrap: vi.fn(),
+        error: vi.fn(),
+      },
       rest: {
         pulls: {
           get: vi.fn(),
@@ -292,6 +305,209 @@ describe("getAppOctokit", () => {
         appId: "123456",
         privateKey: expect.stringContaining("-----BEGIN PRIVATE KEY-----"),
       },
+    });
+  });
+});
+
+describe("Diagnostics Hooks and Error Sanitization", () => {
+  describe("getHeaderValue", () => {
+    it("retrieves header value case-insensitively from a plain object", () => {
+      const headers = { "X-Accepted-GitHub-Permissions": "pull_requests=read" };
+      expect(getHeaderValue(headers, "x-accepted-github-permissions")).toBe("pull_requests=read");
+      expect(getHeaderValue(headers, "other-header")).toBe("none");
+      expect(getHeaderValue(undefined, "x-accepted-github-permissions")).toBe("none");
+    });
+
+    it("retrieves header value from a Headers instance", () => {
+      const headers = new Headers();
+      headers.set("x-github-request-id", "REQ-ABC-123");
+      expect(getHeaderValue(headers, "X-GitHub-Request-Id")).toBe("REQ-ABC-123");
+      expect(getHeaderValue(headers, "absent-header")).toBe("none");
+    });
+  });
+
+  describe("getOperationLabel", () => {
+    it("maps pull diff request to 'pulls.get diff'", () => {
+      expect(
+        getOperationLabel({
+          method: "GET",
+          url: "/repos/{owner}/{repo}/pulls/{pull_number}",
+          mediaType: { format: "diff" },
+        })
+      ).toBe("pulls.get diff");
+    });
+
+    it("maps review creation to 'pulls.createReview'", () => {
+      expect(
+        getOperationLabel({
+          method: "POST",
+          url: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+        })
+      ).toBe("pulls.createReview");
+    });
+
+    it("maps review update to 'pulls.updateReview'", () => {
+      expect(
+        getOperationLabel({
+          method: "PUT",
+          url: "/repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}",
+        })
+      ).toBe("pulls.updateReview");
+    });
+
+    it("maps token minting to 'app.createInstallationAccessToken'", () => {
+      expect(
+        getOperationLabel({
+          method: "POST",
+          url: "/app/installations/{installation_id}/access_tokens",
+        })
+      ).toBe("app.createInstallationAccessToken");
+    });
+  });
+
+  describe("formatGitHubError", () => {
+    it("formats 403 error into sanitized diagnostic string with accepted permissions and request_id", () => {
+      const error = Object.assign(new Error("Resource not accessible by integration"), {
+        status: 403,
+        response: {
+          status: 403,
+          headers: {
+            "x-accepted-github-permissions": "pull_requests=read",
+            "x-github-request-id": "1A2B:3C4D:5E6F",
+          },
+        },
+      });
+
+      const formatted = formatGitHubError(error, "pulls.get diff");
+      expect(formatted).toBe(
+        "GitHub 403 at pulls.get diff: accepted=[pull_requests=read], request_id=1A2B:3C4D:5E6F"
+      );
+    });
+
+    it("uses 'none' when headers are absent and contains no secret tokens or keys", () => {
+      const canarySecret = "ghs_SECRET_TOKEN_DO_NOT_LEAK";
+      const error = Object.assign(new Error(`Failed with ${canarySecret}`), {
+        status: 401,
+        response: {
+          status: 401,
+        },
+      });
+
+      const formatted = formatGitHubError(error, "pulls.createReview");
+      expect(formatted).toBe("GitHub 401 at pulls.createReview: accepted=[none], request_id=none");
+      expect(formatted).not.toContain(canarySecret);
+    });
+
+    it("does not double-format an already formatted error string", () => {
+      const preformatted = new Error(
+        "GitHub 403 at pulls.get diff: accepted=[pull_requests=read], request_id=REQ-1"
+      );
+      expect(formatGitHubError(preformatted, "pulls.get diff")).toBe(
+        "GitHub 403 at pulls.get diff: accepted=[pull_requests=read], request_id=REQ-1"
+      );
+    });
+  });
+
+  describe("isGitHubAuthOrPermissionError", () => {
+    it("returns true for 401 and 403 status codes", () => {
+      expect(isGitHubAuthOrPermissionError({ status: 401 })).toBe(true);
+      expect(isGitHubAuthOrPermissionError({ status: 403 })).toBe(true);
+      expect(isGitHubAuthOrPermissionError({ response: { status: 403 } })).toBe(true);
+      expect(isGitHubAuthOrPermissionError({ status: 404 })).toBe(false);
+      expect(isGitHubAuthOrPermissionError({ status: 500 })).toBe(false);
+      expect(isGitHubAuthOrPermissionError(null)).toBe(false);
+    });
+  });
+
+  describe("attachDiagnosticsHooks", () => {
+    type RequestFn = (opt: unknown) => Promise<{ data: unknown; headers?: Record<string, string> }>;
+    type WrapHandler = (req: RequestFn, opt: { url?: string; method?: string }) => Promise<{ data: unknown }>;
+    type ErrorHandler = (err: unknown, opt: { url?: string; method?: string }) => Promise<never>;
+
+    it("logs permissions object on token mint and NEVER logs the token or headers", async () => {
+      const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+      let wrappedHandler: WrapHandler | null = null;
+      const fakeOctokit = {
+        hook: {
+          wrap: vi.fn().mockImplementation((name: string, fn: WrapHandler) => {
+            if (name === "request") wrappedHandler = fn;
+          }),
+          error: vi.fn(),
+        },
+      } as unknown as Octokit;
+
+      attachDiagnosticsHooks(fakeOctokit);
+      expect(fakeOctokit.hook.wrap).toHaveBeenCalledWith("request", expect.any(Function));
+
+      const fakeToken = "ghs_SENSITIVE_BEARER_TOKEN_999";
+      const fakePermissions = { pull_requests: "write", metadata: "read" };
+
+      const mockRequest = vi.fn().mockResolvedValue({
+        data: {
+          token: fakeToken,
+          expires_at: "2026-10-25T14:00:00Z",
+          permissions: fakePermissions,
+        },
+        headers: {
+          authorization: `bearer ${fakeToken}`,
+        },
+      });
+
+      const options = {
+        url: "/app/installations/123/access_tokens",
+        method: "POST",
+      };
+
+      const res = await wrappedHandler!(mockRequest, options);
+      expect((res.data as { token: string }).token).toBe(fakeToken);
+
+      expect(infoSpy).toHaveBeenCalled();
+      const loggedArgs = infoSpy.mock.calls.map((c) => c.join(" ")).join(" ");
+      expect(loggedArgs).toContain("pull_requests");
+      expect(loggedArgs).toContain("write");
+      // STRICT: Must never log token, bearer, or auth headers
+      expect(loggedArgs).not.toContain(fakeToken);
+      expect(loggedArgs).not.toContain("bearer");
+
+      infoSpy.mockRestore();
+    });
+
+    it("error hook intercepts 403 and formats sanitized diagnostic error without token fragments", async () => {
+      let errorHandler: ErrorHandler | null = null;
+      const fakeOctokit = {
+        hook: {
+          wrap: vi.fn(),
+          error: vi.fn().mockImplementation((name: string, fn: ErrorHandler) => {
+            if (name === "request") errorHandler = fn;
+          }),
+        },
+      } as unknown as Octokit;
+
+      attachDiagnosticsHooks(fakeOctokit);
+      expect(fakeOctokit.hook.error).toHaveBeenCalledWith("request", expect.any(Function));
+
+      const canarySecret = "ghs_SECRET_INTEGRATION_TOKEN_ABC";
+      const mockError = Object.assign(new Error(`Forbidden ${canarySecret}`), {
+        status: 403,
+        response: {
+          status: 403,
+          headers: {
+            "x-accepted-github-permissions": "pull_requests=write",
+            "x-github-request-id": "REQ-DIAG-403",
+          },
+        },
+      });
+
+      const options = {
+        url: "/repos/owner/repo/pulls/1/reviews",
+        method: "POST",
+      };
+
+      await expect(errorHandler!(mockError, options)).rejects.toThrowError(
+        "GitHub 403 at pulls.createReview: accepted=[pull_requests=write], request_id=REQ-DIAG-403"
+      );
+      expect(mockError.message).not.toContain(canarySecret);
     });
   });
 });

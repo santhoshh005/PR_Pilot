@@ -113,13 +113,15 @@ export function getAppOctokit(): Octokit {
 
   const privateKey = loadPrivateKey();
 
-  return new Octokit({
+  const octokit = new Octokit({
     authStrategy: createAppAuth,
     auth: {
       appId,
       privateKey,
     },
   });
+
+  return attachDiagnosticsHooks(octokit);
 }
 
 /**
@@ -135,7 +137,7 @@ export function getInstallationOctokit(installationId: number): Octokit {
 
   const privateKey = loadPrivateKey();
 
-  return new Octokit({
+  const octokit = new Octokit({
     authStrategy: createAppAuth,
     auth: {
       appId,
@@ -143,4 +145,173 @@ export function getInstallationOctokit(installationId: number): Octokit {
       installationId,
     },
   });
+
+  return attachDiagnosticsHooks(octokit);
+}
+
+/**
+ * Safely extracts header values (case-insensitively) without leaking objects or headers.
+ */
+export function getHeaderValue(
+  headers: Record<string, unknown> | Headers | undefined,
+  name: string
+): string {
+  if (!headers) return "none";
+  const lowerName = name.toLowerCase();
+  if (typeof (headers as Headers).get === "function") {
+    const val = (headers as Headers).get(lowerName);
+    return val && val.trim() ? val.trim() : "none";
+  }
+  for (const [key, val] of Object.entries(headers)) {
+    if (key.toLowerCase() === lowerName) {
+      if (val !== undefined && val !== null) {
+        if (Array.isArray(val) && val.length > 0) {
+          const first = String(val[0]).trim();
+          return first || "none";
+        }
+        const str = String(val).trim();
+        return str || "none";
+      }
+    }
+  }
+  return "none";
+}
+
+/**
+ * Derives a human-readable API operation label from request options.
+ */
+export function getOperationLabel(options?: {
+  method?: string;
+  url?: string;
+  mediaType?: { format?: string };
+}): string {
+  if (!options) return "request";
+  const url = options.url || "";
+  const method = (options.method || "GET").toUpperCase();
+
+  if (url.includes("/pulls") && options.mediaType?.format === "diff") {
+    return "pulls.get diff";
+  }
+  if (url.includes("/pulls") && url.includes("/reviews") && method === "POST") {
+    return "pulls.createReview";
+  }
+  if (url.includes("/pulls") && url.includes("/reviews") && method === "PUT") {
+    return "pulls.updateReview";
+  }
+  if (url.includes("/pulls") && url.includes("/reviews") && method === "GET") {
+    return "pulls.listReviews";
+  }
+  if (url.includes("/pulls") && url.includes("/comments") && method === "POST") {
+    return "pulls.createReviewComment";
+  }
+  if (url.includes("/pulls") && method === "GET") {
+    return "pulls.get";
+  }
+  if (url.includes("/access_tokens") && method === "POST") {
+    return "app.createInstallationAccessToken";
+  }
+  if (url.includes("/issues") && url.includes("/comments") && method === "POST") {
+    return "issues.createComment";
+  }
+
+  // Strip query parameters to prevent leaking any URL parameters in diagnostics
+  const cleanUrl = url.split("?")[0];
+  return `${method} ${cleanUrl}`;
+}
+
+/**
+ * Checks whether an error is a GitHub HTTP 401 Unauthorized or HTTP 403 Forbidden.
+ */
+export function isGitHubAuthOrPermissionError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const status =
+    (err as { status?: number; response?: { status?: number } }).status ||
+    (err as { response?: { status?: number } }).response?.status;
+  return status === 401 || status === 403;
+}
+
+/**
+ * Formats a GitHub 401/403 error into a sanitized diagnostic string containing only:
+ * - HTTP status
+ * - operation label
+ * - x-accepted-github-permissions header (or "none")
+ * - x-github-request-id header (or "none")
+ * Completely redacts everything else to guarantee zero credential/header leakage.
+ */
+export function formatGitHubError(err: unknown, operationLabel: string): string {
+  if (err instanceof Error && /^GitHub (401|403) at /.test(err.message)) {
+    return err.message;
+  }
+  const obj = err && typeof err === "object" ? (err as Record<string, unknown>) : {};
+  const status =
+    (obj.status as number | undefined) ||
+    ((obj.response as { status?: number } | undefined)?.status) ||
+    403;
+  const headers = (obj.response as { headers?: Record<string, unknown> | Headers } | undefined)
+    ?.headers;
+  const accepted = getHeaderValue(headers, "x-accepted-github-permissions");
+  const requestId = getHeaderValue(headers, "x-github-request-id");
+
+  return `GitHub ${status} at ${operationLabel}: accepted=[${accepted}], request_id=${requestId}`;
+}
+
+/**
+ * Attaches safe diagnostics hooks to an Octokit instance:
+ * 1. On access token mint/refresh: logs ONLY the permissions object returned by GitHub
+ *    (permission names and access levels only, never any token or auth header).
+ * 2. On 401/403 errors: intercepts and formats into a sanitized diagnostic string.
+ */
+export function attachDiagnosticsHooks<T extends Octokit>(octokit: T): T {
+  if (!octokit || !octokit.hook) {
+    return octokit;
+  }
+
+  octokit.hook.wrap("request", async (request, options) => {
+    const response = await request(options);
+
+    if (
+      options?.url &&
+      typeof options.url === "string" &&
+      options.url.includes("/access_tokens") &&
+      response?.data &&
+      typeof response.data === "object" &&
+      "permissions" in response.data
+    ) {
+      const rawPerms = (response.data as { permissions?: Record<string, string> }).permissions;
+      if (rawPerms && typeof rawPerms === "object") {
+        const sanitizedPerms: Record<string, string> = {};
+        for (const [key, val] of Object.entries(rawPerms)) {
+          if (typeof val === "string") {
+            sanitizedPerms[key] = val;
+          }
+        }
+        console.info(
+          "[GITHUB_AUTH] Installation token permissions:",
+          JSON.stringify(sanitizedPerms)
+        );
+      }
+    }
+
+    return response;
+  });
+
+  octokit.hook.error("request", async (error, options) => {
+    if (isGitHubAuthOrPermissionError(error)) {
+      const label = getOperationLabel(options);
+      const sanitizedMessage = formatGitHubError(error, label);
+      error.message = sanitizedMessage;
+
+      // Defense-in-depth: scrub authorization header from underlying RequestError request metadata
+      if (error && typeof error === "object" && "request" in error) {
+        const req = (error as { request?: { headers?: Record<string, unknown> } }).request;
+        if (req?.headers) {
+          delete req.headers.authorization;
+          delete req.headers.Authorization;
+        }
+      }
+    }
+    throw error;
+  });
+
+  return octokit;
 }

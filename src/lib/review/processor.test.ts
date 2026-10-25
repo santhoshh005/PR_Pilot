@@ -578,6 +578,61 @@ describe("Review Processor / Orchestrator", () => {
       expect(job?.error_message).toBeTruthy();
     });
 
+    it("preserves sanitized diagnostic error string in review_jobs.error_message on GitHub 403 during diff fetch", async () => {
+      vi.spyOn(diffParser, "fetchDiff").mockImplementationOnce(() => {
+        throw new Error(
+          "GitHub 403 at pulls.get diff: accepted=[pull_requests=read], request_id=REQ-TEST-403"
+        );
+      });
+
+      await processReview(dummyJobId);
+
+      const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+      expect(job?.status).toBe("error");
+      expect(job?.error_message).toBe(
+        "GitHub 403 at pulls.get diff: accepted=[pull_requests=read], request_id=REQ-TEST-403"
+      );
+      expect(job?.error_message).not.toMatch(/ghs_|bearer|eyJ/i);
+    });
+
+    it("preserves sanitized diagnostic error string in review_jobs.error_message on GitHub 403 during review posting", async () => {
+      // Mock diffParser to succeed
+      vi.spyOn(diffParser, "fetchDiff").mockResolvedValueOnce(
+        "diff --git a/foo.ts b/foo.ts\n@@ -1,1 +1,2 @@\n context\n+new line\n"
+      );
+
+      // Mock Gemini reviewChunk to succeed
+      vi.spyOn(geminiReview, "reviewChunk").mockResolvedValue({
+        chunk_summary: "Chunk looks fine",
+        comments: [],
+        severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+      });
+
+      // Mock poster to fail with 403 error
+      const poster = await import("@/lib/review/poster");
+      vi.spyOn(poster, "postReviewToGitHub").mockRejectedValueOnce(
+        Object.assign(new Error("Resource not accessible by integration"), {
+          status: 403,
+          response: {
+            status: 403,
+            headers: {
+              "x-accepted-github-permissions": "pull_requests=write",
+              "x-github-request-id": "REQ-POST-403",
+            },
+          },
+        })
+      );
+
+      await processReview(dummyJobId);
+
+      const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+      expect(job?.status).toBe("error");
+      expect(job?.error_message).toBe(
+        "GitHub 403 at github request: accepted=[pull_requests=write], request_id=REQ-POST-403"
+      );
+      expect(job?.error_message).not.toMatch(/ghs_|bearer|eyJ/i);
+    });
+
     it("combineSmallChunks merges hunk_line_numbers per file, does not use comma-joined path, and validates line numbers per file", () => {
       const chunk1 = {
         index: 0,

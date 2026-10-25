@@ -10,7 +10,11 @@ import {
   ReviewJob,
   ReviewJobStatus,
 } from "@/types";
-import { getInstallationOctokit } from "@/lib/github/app";
+import {
+  getInstallationOctokit,
+  formatGitHubError,
+  isGitHubAuthOrPermissionError,
+} from "@/lib/github/app";
 import { fetchDiff, parseDiff, ParsedDiffChunk } from "@/lib/github/diff-parser";
 import {
   isUnavailableError,
@@ -114,7 +118,10 @@ async function handleProcessReviewError(
   jobId: string,
   error: unknown
 ): Promise<void> {
-  const message = error instanceof Error ? error.message : "Unknown error";
+  let message = error instanceof Error ? error.message : "Unknown error";
+  if (isGitHubAuthOrPermissionError(error)) {
+    message = formatGitHubError(error, "github request");
+  }
   console.error(`[PROCESS_REVIEW] Job ${jobId} failed:`, message);
 
   await supabase
@@ -769,7 +776,11 @@ async function postReviewSafely(
       unreviewedFiles,
     });
   } catch (err: unknown) {
-    console.error("[PROCESS_REVIEW] Failed to post review to GitHub:", err);
+    const errMsg = err instanceof Error ? err.message : "Unknown error";
+    console.error("[PROCESS_REVIEW] Failed to post review to GitHub:", errMsg);
+    if (isGitHubAuthOrPermissionError(err)) {
+      throw err;
+    }
     return null;
   }
 }
