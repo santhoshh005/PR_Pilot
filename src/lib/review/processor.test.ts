@@ -826,6 +826,36 @@ describe("Review Processor / Orchestrator", () => {
       expect(job?.status).toBe("queued");
     });
 
+    it("stores sanitised failure reason in review_jobs.error_message when chunk fails", async () => {
+      const geminiErr = new geminiReview.GeminiReviewError(
+        "truncated",
+        "finishReason=MAX_TOKENS,tokens={prompt:100,candidate:4096,thinking:3500},textLen=2048,json=false"
+      );
+      vi.spyOn(geminiReview, "reviewChunk").mockRejectedValueOnce(geminiErr);
+
+      await processReview(dummyJobId);
+
+      const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+      expect(job?.retry_count).toBe(1);
+      expect(job?.status).toBe("queued");
+      expect(job?.error_message).toBe(
+        "gemini:truncated:finishReason=MAX_TOKENS,tokens={prompt:100,candidate:4096,thinking:3500},textLen=2048,json=false"
+      );
+    });
+
+    it("truncates error_message to 400 characters when storing in review_jobs", async () => {
+      const longDetails = "x".repeat(500);
+      const geminiErr = new geminiReview.GeminiReviewError("unknown", longDetails);
+      vi.spyOn(geminiReview, "reviewChunk").mockRejectedValueOnce(geminiErr);
+
+      await processReview(dummyJobId);
+
+      const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+      const errorMessage = typeof job?.error_message === "string" ? job.error_message : "";
+      expect(errorMessage.length).toBeLessThanOrEqual(400);
+      expect(errorMessage.startsWith("gemini:unknown:")).toBe(true);
+    });
+
     it("atomically calls reserve_daily_api_usage before calling Gemini, and marks chunk retry_later without calling Gemini when quota reservation fails", async () => {
       const rpcSpy = vi.spyOn(mockSupabase, "rpc").mockImplementation(async (fn: string) => {
         if (fn === "reserve_daily_api_usage") {

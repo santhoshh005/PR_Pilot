@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -7,6 +7,9 @@ import {
   SYSTEM_PROMPT,
   CHUNK_REVIEW_RESPONSE_SCHEMA,
   ReviewContext,
+  getMaxOutputTokens,
+  formatGeminiErrorReason,
+  GeminiReviewError,
 } from "./review";
 import { DiffChunk, CONFIG } from "@/types";
 import { GoogleGenAI } from "@google/genai";
@@ -326,7 +329,7 @@ describe("reviewChunk - with mocked Gemini API", () => {
         ...dummyContext,
         client: mockClient,
       })
-    ).rejects.toThrow(/invalid review JSON/i);
+    ).rejects.toThrow(/gemini:invalid_json:|invalid review JSON/i);
 
     expect(mockGenerateContent).toHaveBeenCalledTimes(2);
   });
@@ -487,6 +490,291 @@ describe("reviewChunk - with mocked Gemini API", () => {
         process.env.GEMINI_MODEL = prevModel;
       }
     }
+  });
+
+  describe("GEMINI_MAX_OUTPUT_TOKENS Configuration", () => {
+    const originalTokens = process.env.GEMINI_MAX_OUTPUT_TOKENS;
+
+    afterEach(() => {
+      if (originalTokens === undefined) {
+        delete process.env.GEMINI_MAX_OUTPUT_TOKENS;
+      } else {
+        process.env.GEMINI_MAX_OUTPUT_TOKENS = originalTokens;
+      }
+    });
+
+    it("defaults to 4096 when GEMINI_MAX_OUTPUT_TOKENS is unset", () => {
+      delete process.env.GEMINI_MAX_OUTPUT_TOKENS;
+      expect(getMaxOutputTokens()).toBe(4096);
+    });
+
+    it("defaults to 4096 when GEMINI_MAX_OUTPUT_TOKENS is invalid or NaN", () => {
+      process.env.GEMINI_MAX_OUTPUT_TOKENS = "invalid_number";
+      expect(getMaxOutputTokens()).toBe(4096);
+    });
+
+    it("defaults to 4096 when GEMINI_MAX_OUTPUT_TOKENS is below 1024", () => {
+      process.env.GEMINI_MAX_OUTPUT_TOKENS = "1023";
+      expect(getMaxOutputTokens()).toBe(4096);
+    });
+
+    it("defaults to 4096 when GEMINI_MAX_OUTPUT_TOKENS is above 65536", () => {
+      process.env.GEMINI_MAX_OUTPUT_TOKENS = "65537";
+      expect(getMaxOutputTokens()).toBe(4096);
+    });
+
+    it("accepts valid values between 1024 and 65536", () => {
+      process.env.GEMINI_MAX_OUTPUT_TOKENS = "1024";
+      expect(getMaxOutputTokens()).toBe(1024);
+
+      process.env.GEMINI_MAX_OUTPUT_TOKENS = "8192";
+      expect(getMaxOutputTokens()).toBe(8192);
+
+      process.env.GEMINI_MAX_OUTPUT_TOKENS = "65536";
+      expect(getMaxOutputTokens()).toBe(65536);
+    });
+  });
+
+  describe("Sanitised Failure Reason Formatting (11 Categories & Redaction)", () => {
+    it("formats 'auth' category with HTTP status", () => {
+      const err = new GeminiReviewError("auth", "status=401");
+      expect(err.sanitizedReason).toBe("gemini:auth:status=401");
+      expect(formatGeminiErrorReason(err)).toBe("gemini:auth:status=401");
+    });
+
+    it("formats 'model_not_found' category with HTTP status", () => {
+      const err = new GeminiReviewError("model_not_found", "status=404");
+      expect(formatGeminiErrorReason(err)).toBe("gemini:model_not_found:status=404");
+    });
+
+    it("formats 'bad_request' category with HTTP status", () => {
+      const err = new GeminiReviewError("bad_request", "status=400");
+      expect(formatGeminiErrorReason(err)).toBe("gemini:bad_request:status=400");
+    });
+
+    it("formats 'rate_limit' category with HTTP status", () => {
+      const err = new GeminiReviewError("rate_limit", "status=429");
+      expect(formatGeminiErrorReason(err)).toBe("gemini:rate_limit:status=429");
+    });
+
+    it("formats 'unavailable' category with HTTP status", () => {
+      const err = new GeminiReviewError("unavailable", "status=503");
+      expect(formatGeminiErrorReason(err)).toBe("gemini:unavailable:status=503");
+    });
+
+    it("formats 'empty_response' category with textLen and finishReason", () => {
+      const err = new GeminiReviewError("empty_response", "textLen=0,finishReason=STOP");
+      expect(formatGeminiErrorReason(err)).toBe("gemini:empty_response:textLen=0,finishReason=STOP");
+    });
+
+    it("formats 'blocked' category with blockReason", () => {
+      const err = new GeminiReviewError("blocked", "blockReason=SAFETY");
+      expect(formatGeminiErrorReason(err)).toBe("gemini:blocked:blockReason=SAFETY");
+    });
+
+    it("formats 'truncated' category with token counts, textLen and finishReason", () => {
+      const details = "finishReason=MAX_TOKENS,tokens={prompt:100,candidate:4096,thinking:3500},textLen=2048,json=false";
+      const err = new GeminiReviewError("truncated", details);
+      expect(formatGeminiErrorReason(err)).toBe(`gemini:truncated:${details}`);
+    });
+
+    it("formats 'invalid_json' category with textLen and json=false", () => {
+      const err = new GeminiReviewError("invalid_json", "textLen=350,json=false");
+      expect(formatGeminiErrorReason(err)).toBe("gemini:invalid_json:textLen=350,json=false");
+    });
+
+    it("formats 'schema_invalid' category with Zod issue paths and codes only", () => {
+      const details = "issues=[comments.0.severity:invalid_enum_value,chunk_summary:invalid_type]";
+      const err = new GeminiReviewError("schema_invalid", details);
+      expect(formatGeminiErrorReason(err)).toBe(`gemini:schema_invalid:${details}`);
+    });
+
+    it("formats 'unknown' category with HTTP status or default", () => {
+      const err = new GeminiReviewError("unknown", "status=500");
+      expect(formatGeminiErrorReason(err)).toBe("gemini:unknown:status=500");
+    });
+
+    it("strictly truncates formatted reason to 400 characters", () => {
+      const longDetails = "x".repeat(600);
+      const err = new GeminiReviewError("unknown", longDetails);
+      expect(err.sanitizedReason.length).toBe(400);
+      expect(formatGeminiErrorReason(err).length).toBe(400);
+    });
+
+    it("proves a response containing a fake secret and sample code never leaks into the stored reason", () => {
+      const fakeSecret = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+      const sampleCode = "const dbPassword = 'supersecret_password_123!'; connect(dbPassword);";
+      const rawResponse = `{"invalid_json": true, "leak": "${fakeSecret}", "snippet": "${sampleCode}"`;
+
+      // Simulating a failed response where response text contained sensitive code/key material
+      const err = new GeminiReviewError("invalid_json", `textLen=${rawResponse.length},json=false`);
+      const reason = formatGeminiErrorReason(err);
+
+      expect(reason).not.toContain(fakeSecret);
+      expect(reason).not.toContain(sampleCode);
+      expect(reason).not.toContain("supersecret");
+      expect(reason).not.toContain("password");
+      expect(reason).not.toContain("connect");
+      expect(reason).toBe(`gemini:invalid_json:textLen=${rawResponse.length},json=false`);
+    });
+  });
+
+  describe("Response Pre-Validation & Classification in reviewChunk", () => {
+    it("classifies response with finishReason MAX_TOKENS as truncated and does NOT retry", async () => {
+      const mockGenerateContent = vi.fn().mockResolvedValue({
+        candidates: [
+          {
+            finishReason: "MAX_TOKENS",
+            content: { parts: [{ text: '{"chunk_summary": "incomplete' }] },
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 150,
+          candidatesTokenCount: 4096,
+          thoughtsTokenCount: 3800,
+        },
+        text: '{"chunk_summary": "incomplete',
+      });
+
+      const mockClient = {
+        models: { generateContent: mockGenerateContent },
+      } as unknown as GoogleGenAI;
+
+      await expect(
+        reviewChunk(dummyChunk, {
+          ...dummyContext,
+          client: mockClient,
+        })
+      ).rejects.toThrow(/gemini:truncated:/);
+
+      // Must NOT retry with the same limits when truncated
+      expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    });
+
+    it("classifies response with empty text or missing candidates as empty_response and does NOT retry", async () => {
+      const mockGenerateContent = vi.fn().mockResolvedValue({
+        candidates: [
+          {
+            finishReason: "STOP",
+            content: { parts: [] },
+          },
+        ],
+        text: "",
+      });
+
+      const mockClient = {
+        models: { generateContent: mockGenerateContent },
+      } as unknown as GoogleGenAI;
+
+      await expect(
+        reviewChunk(dummyChunk, {
+          ...dummyContext,
+          client: mockClient,
+        })
+      ).rejects.toThrow(/gemini:empty_response:/);
+
+      expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    });
+
+    it("classifies prompt blocked by safety filters as blocked and does NOT retry", async () => {
+      const mockGenerateContent = vi.fn().mockResolvedValue({
+        promptFeedback: {
+          blockReason: "SAFETY",
+        },
+        candidates: [],
+        text: undefined,
+      });
+
+      const mockClient = {
+        models: { generateContent: mockGenerateContent },
+      } as unknown as GoogleGenAI;
+
+      await expect(
+        reviewChunk(dummyChunk, {
+          ...dummyContext,
+          client: mockClient,
+        })
+      ).rejects.toThrow(/gemini:blocked:blockReason=SAFETY/);
+
+      expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    });
+
+    it("classifies candidate blocked by SAFETY as blocked and does NOT retry", async () => {
+      const mockGenerateContent = vi.fn().mockResolvedValue({
+        candidates: [
+          {
+            finishReason: "SAFETY",
+          },
+        ],
+        text: undefined,
+      });
+
+      const mockClient = {
+        models: { generateContent: mockGenerateContent },
+      } as unknown as GoogleGenAI;
+
+      await expect(
+        reviewChunk(dummyChunk, {
+          ...dummyContext,
+          client: mockClient,
+        })
+      ).rejects.toThrow(/gemini:blocked:finishReason=SAFETY/);
+
+      expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries once on malformed JSON and throws gemini:invalid_json if retry fails", async () => {
+      const mockGenerateContent = vi
+        .fn()
+        .mockResolvedValueOnce({
+          candidates: [{ finishReason: "STOP", content: { parts: [{ text: "not json 1" }] } }],
+          text: "not json 1",
+        })
+        .mockResolvedValueOnce({
+          candidates: [{ finishReason: "STOP", content: { parts: [{ text: "not json 2" }] } }],
+          text: "not json 2",
+        });
+
+      const mockClient = {
+        models: { generateContent: mockGenerateContent },
+      } as unknown as GoogleGenAI;
+
+      await expect(
+        reviewChunk(dummyChunk, {
+          ...dummyContext,
+          client: mockClient,
+        })
+      ).rejects.toThrow(/gemini:invalid_json:textLen=10,json=false/);
+
+      expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries once on schema invalid response and throws gemini:schema_invalid with issue paths/codes", async () => {
+      const invalidObj = { chunk_summary: "summary", comments: "not-an-array", severity_counts: {} };
+      const mockGenerateContent = vi
+        .fn()
+        .mockResolvedValueOnce({
+          candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(invalidObj) }] } }],
+          text: JSON.stringify(invalidObj),
+        })
+        .mockResolvedValueOnce({
+          candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(invalidObj) }] } }],
+          text: JSON.stringify(invalidObj),
+        });
+
+      const mockClient = {
+        models: { generateContent: mockGenerateContent },
+      } as unknown as GoogleGenAI;
+
+      await expect(
+        reviewChunk(dummyChunk, {
+          ...dummyContext,
+          client: mockClient,
+        })
+      ).rejects.toThrow(/gemini:schema_invalid:issues=/);
+
+      expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

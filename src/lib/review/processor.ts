@@ -20,6 +20,7 @@ import {
   isUnavailableError,
   reviewChunk,
   ReviewContext,
+  formatGeminiErrorReason,
 } from "@/lib/gemini/review";
 import { mergeChunkResults } from "@/lib/review/merger";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -53,6 +54,7 @@ interface ChunkExecutionResult {
   filePath: string;
   result: ChunkReviewResult | null;
   status: "completed" | "error" | "retry_later";
+  errorReason?: string;
 }
 
 /**
@@ -551,6 +553,7 @@ async function processSingleChunk(
       (err as { message?: string })?.message?.includes("Daily Gemini API budget exhausted");
 
     const status = isUnavailable ? "retry_later" : "error";
+    const errorReason = formatGeminiErrorReason(err);
 
     await supabase
       .from("review_chunks")
@@ -563,6 +566,7 @@ async function processSingleChunk(
       filePath: chunk.file_path,
       result: null,
       status,
+      errorReason,
     };
   }
 }
@@ -635,7 +639,7 @@ async function finalizeReviewJob(
 
   const anyFailed = results.some((r) => r.status !== "completed");
   if (anyFailed) {
-    await handleJobRetryOrFailure(supabase, context.job);
+    await handleJobRetryOrFailure(supabase, context.job, results);
     return;
   }
 
@@ -687,20 +691,28 @@ async function handlePartialReview(
 
 async function handleJobRetryOrFailure(
   supabase: SupabaseClient,
-  job: ReviewJob
+  job: ReviewJob,
+  results?: ChunkExecutionResult[]
 ): Promise<void> {
+  const failureReason = results?.find((r) => r.errorReason)?.errorReason || null;
   const nextRetry = job.retry_count + 1;
   if (nextRetry < CONFIG.MAX_JOB_RETRIES) {
     await supabase
       .from("review_jobs")
-      .update({ status: "queued", retry_count: nextRetry })
+      .update({
+        status: "queued",
+        retry_count: nextRetry,
+        error_message: failureReason ? failureReason.slice(0, 400) : null,
+      })
       .eq("id", job.id);
   } else {
     await supabase
       .from("review_jobs")
       .update({
         status: "failed",
-        error_message: "Max retries reached with unresolved chunk errors",
+        error_message: failureReason
+          ? failureReason.slice(0, 400)
+          : "Max retries reached with unresolved chunk errors",
         completed_at: new Date().toISOString(),
       })
       .eq("id", job.id);

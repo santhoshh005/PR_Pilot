@@ -96,6 +96,7 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
 | `GEMINI_DAILY_LIMIT` | **Runtime-Only** | Vercel / `.env.local` | No | Daily request budget cap (e.g. `15` free tier, `1500` standard). |
 | `GEMINI_CONCURRENCY` | **Runtime-Only** | Vercel / `.env.local` | No | Max concurrent chunk LLM requests (default: `2`). |
 | `GEMINI_THINKING_LEVEL` | **Runtime-Only** | Vercel / `.env.local` | No | Thinking budget for Flash models: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` (default: `LOW`). |
+| `GEMINI_MAX_OUTPUT_TOKENS` | **Runtime-Only** | Vercel / `.env.local` | No | Maximum token limit for Gemini output (1024–65536, default: `4096`). |
 
 > [!NOTE]
 > Next.js inlines `NEXT_PUBLIC_*` variables into client-side JavaScript bundles at build time. Changing any `NEXT_PUBLIC_*` variable in Vercel Project Settings requires triggering a **Redeploy** for changes to take effect in the browser. Server-only runtime variables are read on-demand by Serverless Functions. Build tolerance allows `next build` to complete successfully even when GitHub runtime credentials are unset during initial provisioning.

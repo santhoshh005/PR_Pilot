@@ -15,6 +15,236 @@ export class UnavailableError extends Error {
   }
 }
 
+export type GeminiErrorCategory =
+  | "auth"
+  | "model_not_found"
+  | "bad_request"
+  | "rate_limit"
+  | "unavailable"
+  | "empty_response"
+  | "blocked"
+  | "truncated"
+  | "invalid_json"
+  | "schema_invalid"
+  | "unknown";
+
+export class GeminiReviewError extends Error {
+  readonly category: GeminiErrorCategory;
+  readonly sanitizedReason: string;
+
+  constructor(category: GeminiErrorCategory, details: string) {
+    const rawReason = `gemini:${category}:${details}`;
+    const sanitizedReason = rawReason.slice(0, 400);
+    super(sanitizedReason);
+    this.name = "GeminiReviewError";
+    this.category = category;
+    this.sanitizedReason = sanitizedReason;
+  }
+}
+
+export function getMaxOutputTokens(): number {
+  const envVal = process.env.GEMINI_MAX_OUTPUT_TOKENS;
+  if (envVal) {
+    const parsed = parseInt(envVal, 10);
+    if (!isNaN(parsed) && parsed >= 1024 && parsed <= 65536) {
+      return parsed;
+    }
+  }
+  return 4096;
+}
+
+export function extractHttpStatus(err: unknown): number | undefined {
+  if (typeof err === "object" && err !== null) {
+    if ("status" in err && typeof (err as { status: unknown }).status === "number") {
+      return (err as { status: number }).status;
+    }
+    if ("statusCode" in err && typeof (err as { statusCode: unknown }).statusCode === "number") {
+      return (err as { statusCode: number }).statusCode;
+    }
+    if ("response" in err && typeof (err as { response: unknown }).response === "object") {
+      const resp = (err as { response: { status?: number; statusCode?: number } }).response;
+      if (typeof resp?.status === "number") return resp.status;
+      if (typeof resp?.statusCode === "number") return resp.statusCode;
+    }
+  }
+  if (err instanceof Error) {
+    const match = err.message.match(/\b(400|401|403|404|429|500|503)\b/);
+    if (match) {
+      return parseInt(match[1], 10);
+    }
+  }
+  return undefined;
+}
+
+export function classifyThrownError(err: unknown): GeminiReviewError {
+  if (err instanceof GeminiReviewError) {
+    return err;
+  }
+  if (err instanceof UnavailableError) {
+    return new GeminiReviewError("unavailable", "status=503");
+  }
+
+  const status = extractHttpStatus(err);
+  if (status !== undefined) {
+    if (status === 401 || status === 403) {
+      return new GeminiReviewError("auth", `status=${status}`);
+    }
+    if (status === 404) {
+      return new GeminiReviewError("model_not_found", `status=${status}`);
+    }
+    if (status === 400) {
+      return new GeminiReviewError("bad_request", `status=${status}`);
+    }
+    if (status === 429) {
+      return new GeminiReviewError("rate_limit", `status=${status}`);
+    }
+    if (status === 503) {
+      return new GeminiReviewError("unavailable", `status=${status}`);
+    }
+    return new GeminiReviewError("unknown", `status=${status}`);
+  }
+
+  // Fallback to message heuristics only when status is undefined
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+
+  if (
+    msg.includes("api_key") ||
+    msg.includes("unauthenticated") ||
+    msg.includes("permission_denied")
+  ) {
+    return new GeminiReviewError("auth", "status=401");
+  }
+
+  if (msg.includes("not found") || msg.includes("models/")) {
+    return new GeminiReviewError("model_not_found", "status=404");
+  }
+
+  if (msg.includes("invalid argument") || msg.includes("bad request")) {
+    return new GeminiReviewError("bad_request", "status=400");
+  }
+
+  if (msg.includes("resource_exhausted") || msg.includes("rate limit")) {
+    return new GeminiReviewError("rate_limit", "status=429");
+  }
+
+  if (msg.includes("unavailable") || msg.includes("high demand")) {
+    return new GeminiReviewError("unavailable", "status=503");
+  }
+
+  return new GeminiReviewError("unknown", "status=none");
+}
+
+export function formatGeminiErrorReason(err: unknown): string {
+  if (err instanceof GeminiReviewError) {
+    return err.sanitizedReason.slice(0, 400);
+  }
+  return classifyThrownError(err).sanitizedReason.slice(0, 400);
+}
+
+export interface GeminiCandidateLike {
+  finishReason?: string;
+  content?: { parts?: Array<{ text?: string; thought?: boolean }> };
+}
+
+export interface GeminiResponseLike {
+  candidates?: GeminiCandidateLike[];
+  promptFeedback?: {
+    blockReason?: string;
+  };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    thoughtsTokenCount?: number;
+    totalTokenCount?: number;
+  };
+  text?: string;
+}
+
+export function inspectAndValidateResponse(response: GeminiResponseLike):
+  | { success: true; data: ChunkReviewResult }
+  | { success: false; error: GeminiReviewError; shouldRetry: boolean } {
+  if (response.promptFeedback?.blockReason) {
+    return {
+      success: false,
+      error: new GeminiReviewError(
+        "blocked",
+        `blockReason=${response.promptFeedback.blockReason}`
+      ),
+      shouldRetry: false,
+    };
+  }
+
+  const firstCandidate = response.candidates?.[0];
+  if (firstCandidate?.finishReason) {
+    const fr = String(firstCandidate.finishReason).toUpperCase();
+    if (
+      fr === "SAFETY" ||
+      fr === "BLOCKLIST" ||
+      fr === "PROHIBITED_CONTENT" ||
+      fr === "SPII" ||
+      fr === "IMAGE_SAFETY"
+    ) {
+      return {
+        success: false,
+        error: new GeminiReviewError("blocked", `finishReason=${fr}`),
+        shouldRetry: false,
+      };
+    }
+    if (fr === "MAX_TOKENS") {
+      const usage = response.usageMetadata;
+      const textLen = typeof response.text === "string" ? response.text.length : 0;
+      const tokensPart = `tokens={prompt:${usage?.promptTokenCount ?? 0},candidate:${usage?.candidatesTokenCount ?? 0},thinking:${usage?.thoughtsTokenCount ?? 0}}`;
+      return {
+        success: false,
+        error: new GeminiReviewError(
+          "truncated",
+          `finishReason=MAX_TOKENS,${tokensPart},textLen=${textLen},json=false`
+        ),
+        shouldRetry: false,
+      };
+    }
+  }
+
+  const rawText = typeof response.text === "string" ? response.text : "";
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    const fr = firstCandidate?.finishReason ?? "STOP";
+    return {
+      success: false,
+      error: new GeminiReviewError("empty_response", `textLen=0,finishReason=${fr}`),
+      shouldRetry: false,
+    };
+  }
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(rawText);
+  } catch {
+    return {
+      success: false,
+      error: new GeminiReviewError(
+        "invalid_json",
+        `textLen=${rawText.length},json=false`
+      ),
+      shouldRetry: true,
+    };
+  }
+
+  const schemaResult = ChunkReviewResultSchema.safeParse(parsedJson);
+  if (!schemaResult.success) {
+    const issueList = schemaResult.error.issues
+      .map((iss) => `${iss.path.join(".")}:${iss.code}`)
+      .join(",");
+    return {
+      success: false,
+      error: new GeminiReviewError("schema_invalid", `issues=[${issueList}]`),
+      shouldRetry: true,
+    };
+  }
+
+  return { success: true, data: schemaResult.data };
+}
+
 export interface ReviewContext {
   repo_full_name: string;
   pr_number: number;
@@ -156,31 +386,51 @@ export async function reviewChunk(
   const client = context.client ?? createGeminiClient();
   const initialPrompt = buildUserPrompt(chunk, context);
 
-  const initialResponseText = await executeWithRateLimitRetry(
-    () => callGemini(client, initialPrompt),
-    options
-  );
-
-  const initialParsed = parseAndValidate(initialResponseText);
-  if (initialParsed.success) {
-    return initialParsed.data;
+  let initialResponse: GeminiResponseLike;
+  try {
+    initialResponse = await executeWithRateLimitRetry(
+      () => callGemini(client, initialPrompt),
+      options
+    );
+  } catch (err: unknown) {
+    if (err instanceof UnavailableError) {
+      throw err;
+    }
+    throw err instanceof GeminiReviewError ? err : classifyThrownError(err);
   }
 
-  // Retry once with stricter prompt
+  const initialCheck = inspectAndValidateResponse(initialResponse);
+  if (initialCheck.success) {
+    return initialCheck.data;
+  }
+
+  // Do not retry a truncated response with the same limits; report it.
+  // Also do not retry if empty or blocked.
+  if (!initialCheck.shouldRetry) {
+    throw initialCheck.error;
+  }
+
+  // Retry once with stricter prompt for invalid_json or schema_invalid
   const retryPrompt = initialPrompt + RETRY_INSTRUCTION;
-  const retryResponseText = await executeWithRateLimitRetry(
-    () => callGemini(client, retryPrompt),
-    options
-  );
-
-  const retryParsed = parseAndValidate(retryResponseText);
-  if (retryParsed.success) {
-    return retryParsed.data;
+  let retryResponse: GeminiResponseLike;
+  try {
+    retryResponse = await executeWithRateLimitRetry(
+      () => callGemini(client, retryPrompt),
+      options
+    );
+  } catch (err: unknown) {
+    if (err instanceof UnavailableError) {
+      throw err;
+    }
+    throw err instanceof GeminiReviewError ? err : classifyThrownError(err);
   }
 
-  throw new Error(
-    `Gemini returned invalid review JSON after retry: ${retryParsed.error.message}`
-  );
+  const retryCheck = inspectAndValidateResponse(retryResponse);
+  if (retryCheck.success) {
+    return retryCheck.data;
+  }
+
+  throw retryCheck.error;
 }
 
 function getThinkingLevel(): ThinkingLevel {
@@ -191,8 +441,9 @@ function getThinkingLevel(): ThinkingLevel {
   return ThinkingLevel.LOW;
 }
 
-async function callGemini(client: GoogleGenAI, prompt: string): Promise<string> {
+async function callGemini(client: GoogleGenAI, prompt: string): Promise<GeminiResponseLike> {
   const model = process.env.GEMINI_MODEL || CONFIG.GEMINI_MODEL;
+  const maxOutputTokens = getMaxOutputTokens();
   const response = await client.models.generateContent({
     model,
     contents: prompt,
@@ -201,27 +452,14 @@ async function callGemini(client: GoogleGenAI, prompt: string): Promise<string> 
       responseMimeType: "application/json",
       responseJsonSchema: CHUNK_REVIEW_RESPONSE_SCHEMA,
       temperature: 0.2,
-      maxOutputTokens: 4096,
+      maxOutputTokens,
       thinkingConfig: {
         thinkingLevel: getThinkingLevel(),
       },
     },
   });
 
-  return response.text ?? "";
-}
-
-function parseAndValidate(rawText: string) {
-  try {
-    const json: unknown = JSON.parse(rawText);
-    return ChunkReviewResultSchema.safeParse(json);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "JSON parse error";
-    return {
-      success: false as const,
-      error: new Error(msg),
-    };
-  }
+  return response as unknown as GeminiResponseLike;
 }
 
 async function executeWithRateLimitRetry<T>(
@@ -266,6 +504,7 @@ export function isRetryableError(err: unknown): boolean {
 
 export function isUnavailableError(err: unknown): boolean {
   if (err instanceof UnavailableError) return true;
+  if (err instanceof GeminiReviewError) return err.category === "unavailable";
   if (!(err instanceof Error)) return false;
   const message = err.message.toLowerCase();
   return message.includes("503") || message.includes("unavailable");
