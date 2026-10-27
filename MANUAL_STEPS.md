@@ -63,11 +63,15 @@ Navigate to GitHub: **Settings > Developer Settings > GitHub Apps > New GitHub A
 | **Webhook Active** | Checked | Required to receive real-time repository pull request events. | **`[YOU]`** |
 | **Webhook URL** | `https://<your-app>.vercel.app/api/webhook` | Application webhook endpoint. | **`[YOU]`** |
 | **Webhook secret** | Generated string via `openssl rand -hex 32` | Matches `GITHUB_WEBHOOK_SECRET` for HMAC-SHA256 signature verification. | **`[YOU]`** |
-| **Repository permissions: Pull requests** | `Read and write` | Fetch diffs, post comments, update existing reviews in-place. | **`[YOU]`** |
-| **Repository permissions: Metadata** | `Read-only` | GitHub mandatory default for all GitHub Apps. | **`[YOU]`** |
-| **All other permissions** | `No access` | Least-privilege principle: Contents, Issues, etc., are never requested. | **`[YOU]`** |
+| **Repository permissions: Pull requests** | `Read and write` | Pull requests to read PR metadata and post reviews. | **`[YOU]`** |
+| **Repository permissions: Contents** | `Read-only` | Contents read-only because GitHub requires it to return a pull request's diff (read-only: the app cannot change code). | **`[YOU]`** |
+| **Repository permissions: Metadata** | `Read-only` | Metadata is mandatory. | **`[YOU]`** |
+| **All other permissions** | `No access` | Least-privilege principle: Issues, Actions, Administration, etc., are never requested. | **`[YOU]`** |
 | **Subscribe to events** | `Pull request` only | Listens to `opened`, `synchronize`, `reopened`. | **`[YOU]`** |
 | **Where can this GitHub App be installed?** | `Only on this account` | Required: PRPilot v1 enforces personal-account ownership (`User`). | **`[YOU]`** |
+
+> [!IMPORTANT]
+> **Accepting Updated Permissions**: If you edit permissions on an existing GitHub App (such as adding `Contents: Read-only`), GitHub does not automatically apply them to active installations. The installation owner must accept the updated permissions at `github.com/settings/installations` (or organization installation settings) by clicking **Configure** next to PRPilot and then **Review & accept updated permissions**. Otherwise, GitHub API requests will continue to fail with HTTP 403 `Resource not accessible by integration`.
 
 After clicking **Create GitHub App**:
 1. Note the numeric **App ID** at the top of the General settings page (`GITHUB_APP_ID`).
@@ -148,7 +152,7 @@ Follow this exact sequence to deploy without circular URL or credential dependen
   - Setup URL: `https://<your-project>.vercel.app/dashboard`
   - Webhook URL: `https://<your-project>.vercel.app/api/webhook`
   - Webhook secret: Paste generated 32-byte secret (`GITHUB_WEBHOOK_SECRET`)
-  - Permissions: Pull requests (Read & write), Metadata (Read-only)
+  - Permissions: Pull requests (Read & write), Contents (Read-only), Metadata (Read-only); all others No access
   - Events: Pull request
   - Install target: Only on this account
 - [ ] **`[YOU]`** Click **Create GitHub App**.
@@ -190,6 +194,7 @@ Follow this exact sequence to deploy without circular URL or credential dependen
 ### Step 9: Install GitHub App & Verify End-to-End
 - [ ] **`[YOU]`** In GitHub App Settings > **Install App**, click **Install** next to your personal account.
 - [ ] **`[YOU]`** Choose `Only select repositories` and pick a test repository.
+- [ ] **`[YOU]`** **Accept Updated Permissions (if modifying an existing installation)**: After editing permissions on the GitHub App, the installation owner must accept the updated permissions at `github.com/settings/installations` (click **Configure** next to PRPilot and approve the prompt), otherwise requests will continue to fail with 403.
 - [ ] **`[YOU]`** Open your live deployment: `https://<your-project>.vercel.app/login`.
 - [ ] **`[YOU]`** Click **Continue with GitHub**; authenticate and confirm redirection to `/dashboard`.
 - [ ] **`[YOU]`** Click **Sync Repositories** in the dashboard header or empty state.

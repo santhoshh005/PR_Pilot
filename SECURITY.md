@@ -1,5 +1,21 @@
 # PRPilot — Security Checklist
 
+## Security Model & Data Access Boundary
+
+### GitHub App Permissions & Least Privilege
+PRPilot adheres strictly to the principle of least privilege with the following GitHub App permissions:
+- **Pull requests**: `Read and write` — Pull requests to read PR metadata and post reviews.
+- **Contents**: `Read-only` — Contents read-only because GitHub requires it to return a pull request's diff (read-only: the app cannot change code).
+- **Metadata**: `Read-only` — Metadata is mandatory.
+- **All other permissions**: `No access`.
+
+### Repository Content Access & AI Processing Boundary
+- The app can read repository contents of the repositories it is installed on (it only fetches pull request diffs and sends them to the Gemini API for analysis).
+- Users should install it only on repositories they are comfortable sending to Google's Gemini API.
+- The free tier's data-use terms may differ from paid, to be checked by the user.
+
+---
+
 ## Threat Model
 
 This document covers all security threats specific to a GitHub App that processes untrusted PR content with an AI model and stores GitHub tokens.

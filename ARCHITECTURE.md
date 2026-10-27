@@ -125,6 +125,18 @@ Supabase Auth handles the OAuth dance, session tokens, and refresh. **Why**: Eli
 ### 5. Structured output with JSON schema (not free-text parsing)
 Gemini's `responseJsonSchema` guarantees the response matches our schema. **Why**: Eliminates fragile regex/markdown parsing, makes the review data type-safe end-to-end, and reduces post-processing code to a single `JSON.parse` + `z.parse`.
 
+## Security Model & GitHub App Permissions
+
+### GitHub App Permissions & Least Privilege
+PRPilot operates under least privilege with the following GitHub App permissions:
+- **Pull requests**: `Read and write` — Pull requests to read PR metadata and post reviews.
+- **Contents**: `Read-only` — Contents read-only because GitHub requires it to return a pull request's diff (read-only: the app cannot change code).
+- **Metadata**: `Read-only` — Metadata is mandatory.
+- **All other permissions**: `No access`.
+
+### Repository Content Access & AI Processing Boundary
+The app can read repository contents of the repositories it is installed on (it only fetches pull request diffs and sends them to the Gemini API for analysis). Users should install it only on repositories they are comfortable sending to Google's Gemini API; the free tier's data-use terms may differ from paid, to be checked by the user.
+
 ## Technology Versions
 
 | Package | Version | Notes |

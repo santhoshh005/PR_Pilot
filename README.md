@@ -129,6 +129,7 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
 - **Initial repository sync & backfill**: When repositories are first synced (via the "Sync Repositories" button in the dashboard or upon initial installation), PRPilot automatically backfills open, non-draft pull requests (up to 5 per repository, capped at 20 total per sync) and enqueues them as pending review jobs. Subsequent PR reviews are triggered via `pull_request` webhooks.
 - **Review trigger and cron fallback cadence**: A `pull_request` webhook starts processing immediately in the background serverless execution via `@vercel/functions` `waitUntil`. The scheduled cron (`POST /api/cron/process-reviews` via `.github/workflows/cron.yml`) is solely a fallback safety net for stuck, queued, or deferred jobs (running every 30 minutes on a private repository, or every 5 minutes on a public one).
 - **Postgres-backed rate limiter (fails open with memory fallback)**: The rate limiter uses Postgres exclusively (`rate_limits` table with atomic RPC `check_rate_limit`) with no external caching dependencies. All protected routes—webhook (`/api/webhook`), fallback cron (`/api/cron/process-reviews`), auth (`/api/auth/callback`, `/api/auth/signout`), and dashboard API (`/api/repos`, `/api/repos/[repoId]/*`)—fail open (`failOpen: true`) using an in-memory sliding window fallback if the limiter encounters a database error, preventing service outages during transient database connectivity hiccups. The `rate_limits` table enforces a bounded 50,000 row hard cap with eager expired row pruning.
+- **Repository content access & AI analysis boundary**: The app can read repository contents of the repositories it is installed on (it only fetches pull request diffs and sends them to the Gemini API for analysis), and users should install it only on repositories they are comfortable sending to Google's Gemini API; the free tier's data-use terms may differ from paid, to be checked by the user.
 
 ---
 
@@ -145,8 +146,9 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
    - **Webhook URL**: `https://<your-app>.vercel.app/api/webhook`
    - **Webhook secret**: Generated string matching `GITHUB_WEBHOOK_SECRET`
 4. Configure permissions (least privilege):
-   - **Pull requests**: `Read & write` (diff fetching, posting and updating review comments)
-   - **Metadata**: `Read-only` (default mandatory permission)
+   - **Pull requests**: `Read & write` — Pull requests to read PR metadata and post reviews.
+   - **Contents**: `Read-only` — Contents read-only because GitHub requires it to return a pull request's diff (read-only: the app cannot change code).
+   - **Metadata**: `Read-only` — Metadata is mandatory.
    - *All other permissions*: `No access`
 5. Under **Subscribe to events**, select **Pull request**.
 6. Set **Where can this GitHub App be installed?** to **Only on this account**.
@@ -168,7 +170,7 @@ For a detailed step-by-step checklist with `[YOU]` vs `[AGENT]` responsibility m
 6. **Populate GitHub Variables in Vercel & Redeploy**: Add `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` in Vercel Project Settings and trigger a **Redeploy**.
 7. **Vercel Deployment Protection**: In Vercel Project Settings > Deployment Protection, ensure Vercel Authentication is disabled for Production (or configure Protection Bypass for Automation) so GitHub webhooks and cron triggers are not blocked by 401/307 authentication challenges.
 8. **Configure GitHub Actions Cron**: In GitHub repo Settings > Secrets and variables > Actions, configure repository secret `CRON_SECRET` and variable `APP_URL`.
-9. **Install App & Test**: Install the GitHub App on your personal account and open a test PR to verify the end-to-end review flow.
+9. **Install App & Test**: Install the GitHub App on your personal account and open a test PR to verify the end-to-end review flow. (If updating permissions on an existing GitHub App rather than a new install, the installation owner must accept the updated permissions at `github.com/settings/installations`, otherwise requests will continue to fail with 403).
 
 ---
 
