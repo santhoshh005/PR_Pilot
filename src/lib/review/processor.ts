@@ -20,7 +20,10 @@ import {
   isUnavailableError,
   reviewChunk,
   ReviewContext,
+  ReviewOptions,
   formatGeminiErrorReason,
+  getPrimaryModel,
+  getFallbackModel,
 } from "@/lib/gemini/review";
 import { mergeChunkResults } from "@/lib/review/merger";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -55,6 +58,7 @@ interface ChunkExecutionResult {
   result: ChunkReviewResult | null;
   status: "completed" | "error" | "retry_later";
   errorReason?: string;
+  modelUsed?: string;
 }
 
 /**
@@ -524,6 +528,9 @@ async function processSingleChunk(
   context: ReviewContext,
   timeoutMs: number
 ): Promise<ChunkExecutionResult> {
+  const primaryModel = getPrimaryModel();
+  const fallbackModel = getFallbackModel();
+
   try {
     const reserved = await reserveUsage(supabase, 1);
     if (!reserved) {
@@ -532,7 +539,9 @@ async function processSingleChunk(
       throw quotaErr;
     }
 
-    const result = await reviewWithTimeout(chunk, context, timeoutMs);
+    const result = await reviewWithTimeout(chunk, context, timeoutMs, {
+      model: primaryModel,
+    });
 
     await supabase
       .from("review_chunks")
@@ -545,15 +554,89 @@ async function processSingleChunk(
       filePath: chunk.file_path,
       result,
       status: "completed",
+      modelUsed: primaryModel,
     };
-  } catch (err: unknown) {
+  } catch (primaryErr: unknown) {
+    const isBudgetExhausted =
+      (primaryErr as { message?: string })?.message?.includes("Daily Gemini API budget exhausted");
+
+    // Only attempt fallback if primary failed with an unavailable error and budget was not exhausted
+    const isPrimaryUnavailable = !isBudgetExhausted && isUnavailableError(primaryErr);
+
+    if (isPrimaryUnavailable && fallbackModel) {
+      try {
+        const reservedFallback = await reserveUsage(supabase, 1);
+        if (!reservedFallback) {
+          // Budget exhausted for fallback attempt; chunk stays retry_later with primary 503 error
+          await supabase
+            .from("review_chunks")
+            .update({ status: "retry_later" })
+            .eq("job_id", jobId)
+            .eq("chunk_index", chunk.index);
+
+          return {
+            chunkIndex: chunk.index,
+            filePath: chunk.file_path,
+            result: null,
+            status: "retry_later",
+            errorReason: formatGeminiErrorReason(primaryErr),
+          };
+        }
+
+        const fallbackResult = await reviewWithTimeout(chunk, context, timeoutMs, {
+          model: fallbackModel,
+          maxRateLimitRetries: 0,
+        });
+
+        await supabase
+          .from("review_chunks")
+          .update({ status: "completed", review_json: fallbackResult })
+          .eq("job_id", jobId)
+          .eq("chunk_index", chunk.index);
+
+        return {
+          chunkIndex: chunk.index,
+          filePath: chunk.file_path,
+          result: fallbackResult,
+          status: "completed",
+          modelUsed: fallbackModel,
+        };
+      } catch (fallbackErr: unknown) {
+        const isFallbackBudgetExhausted =
+          (fallbackErr as { message?: string })?.message?.includes("Daily Gemini API budget exhausted");
+        const fallbackUnavailable =
+          isFallbackBudgetExhausted ||
+          isUnavailableError(fallbackErr) ||
+          (fallbackErr as { isUnavailable?: boolean })?.isUnavailable === true;
+
+        const status = fallbackUnavailable ? "retry_later" : "error";
+        const errorReason = fallbackUnavailable
+          ? "gemini:unavailable:status=503:primary+fallback"
+          : formatGeminiErrorReason(fallbackErr);
+
+        await supabase
+          .from("review_chunks")
+          .update({ status })
+          .eq("job_id", jobId)
+          .eq("chunk_index", chunk.index);
+
+        return {
+          chunkIndex: chunk.index,
+          filePath: chunk.file_path,
+          result: null,
+          status,
+          errorReason,
+        };
+      }
+    }
+
     const isUnavailable =
-      isUnavailableError(err) ||
-      (err as { isUnavailable?: boolean })?.isUnavailable === true ||
-      (err as { message?: string })?.message?.includes("Daily Gemini API budget exhausted");
+      isPrimaryUnavailable ||
+      isBudgetExhausted ||
+      (primaryErr as { isUnavailable?: boolean })?.isUnavailable === true;
 
     const status = isUnavailable ? "retry_later" : "error";
-    const errorReason = formatGeminiErrorReason(err);
+    const errorReason = formatGeminiErrorReason(primaryErr);
 
     await supabase
       .from("review_chunks")
@@ -574,14 +657,15 @@ async function processSingleChunk(
 async function reviewWithTimeout(
   chunk: DiffChunk,
   context: ReviewContext,
-  timeoutMs: number
+  timeoutMs: number,
+  options?: ReviewOptions
 ): Promise<ChunkReviewResult> {
   return new Promise<ChunkReviewResult>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`Chunk review timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
-    reviewChunk(chunk, context)
+    reviewChunk(chunk, context, options)
       .then((res) => {
         clearTimeout(timer);
         resolve(res);
@@ -632,8 +716,13 @@ async function finalizeReviewJob(
     .update({ completed_chunks: completed.length })
     .eq("id", context.job.id);
 
+  const modelsUsed = Array.from(
+    new Set(completed.map((c) => c.modelUsed).filter((m): m is string => Boolean(m)))
+  );
+  const modelUsed = modelsUsed.length > 0 ? modelsUsed.join(", ") : getPrimaryModel();
+
   if (deadlineHit) {
-    await handlePartialReview(supabase, context, startTime, chunks, completed);
+    await handlePartialReview(supabase, context, startTime, chunks, completed, modelUsed);
     return;
   }
 
@@ -643,7 +732,7 @@ async function finalizeReviewJob(
     return;
   }
 
-  await handleCompletedReview(supabase, context, startTime, chunks, completed);
+  await handleCompletedReview(supabase, context, startTime, chunks, completed, modelUsed);
 }
 
 async function handlePartialReview(
@@ -651,7 +740,8 @@ async function handlePartialReview(
   context: JobContext,
   startTime: number,
   chunks: ParsedDiffChunk[],
-  completed: Array<ChunkExecutionResult & { result: ChunkReviewResult }>
+  completed: Array<ChunkExecutionResult & { result: ChunkReviewResult }>,
+  modelUsed?: string
 ): Promise<void> {
   const completedIndices = new Set(completed.map((c) => c.chunkIndex));
   const unreviewed = chunks
@@ -669,7 +759,8 @@ async function handlePartialReview(
     merged,
     startTime,
     "partial",
-    unreviewed
+    unreviewed,
+    modelUsed
   );
 
   await saveReviewRecord(
@@ -724,7 +815,8 @@ async function handleCompletedReview(
   context: JobContext,
   startTime: number,
   chunks: ParsedDiffChunk[],
-  completed: Array<ChunkExecutionResult & { result: ChunkReviewResult }>
+  completed: Array<ChunkExecutionResult & { result: ChunkReviewResult }>,
+  modelUsed?: string
 ): Promise<void> {
   const merged = mergeChunkResults(completed.map((c) => c.result));
   const postResult = await postReviewSafely(
@@ -732,7 +824,9 @@ async function handleCompletedReview(
     chunks,
     merged,
     startTime,
-    "completed"
+    "completed",
+    undefined,
+    modelUsed
   );
 
   if (postResult?.skippedClosedPr) {
@@ -766,7 +860,8 @@ async function postReviewSafely(
   merged: FullReviewResult,
   startTime: number,
   jobStatus: ReviewJobStatus | "partial" | "deferred",
-  unreviewedFiles?: string[]
+  unreviewedFiles?: string[],
+  modelUsed?: string
 ): Promise<PostReviewResult | null> {
   try {
     const octokit = getInstallationOctokit(context.installation.installation_id);
@@ -786,6 +881,7 @@ async function postReviewSafely(
       validLineNumbersByFile: validLinesByFile,
       jobStatus,
       unreviewedFiles,
+      modelUsed,
     });
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : "Unknown error";

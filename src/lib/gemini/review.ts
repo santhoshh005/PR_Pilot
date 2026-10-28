@@ -53,6 +53,27 @@ export function getMaxOutputTokens(): number {
   return 4096;
 }
 
+export function getPrimaryModel(): string {
+  return process.env.GEMINI_MODEL?.trim() || CONFIG.GEMINI_MODEL;
+}
+
+export function getFallbackModel(): string | null {
+  const raw = process.env.GEMINI_FALLBACK_MODEL?.trim();
+  if (!raw) return null;
+
+  // Validated as a short string of letters, digits, dots and hyphens only
+  if (!/^[a-zA-Z0-9.-]{1,64}$/.test(raw)) {
+    return null;
+  }
+
+  const primary = getPrimaryModel();
+  if (raw === primary) {
+    return null;
+  }
+
+  return raw;
+}
+
 export function extractHttpStatus(err: unknown): number | undefined {
   if (typeof err === "object" && err !== null) {
     if ("status" in err && typeof (err as { status: unknown }).status === "number") {
@@ -258,6 +279,7 @@ export interface ReviewContext {
 export interface ReviewOptions {
   baseDelayMs?: number;
   maxRateLimitRetries?: number;
+  model?: string;
 }
 
 export const SYSTEM_PROMPT = `You are PRPilot, an expert code reviewer. You review pull request diffs and provide precise, actionable feedback.
@@ -385,11 +407,12 @@ export async function reviewChunk(
 ): Promise<ChunkReviewResult> {
   const client = context.client ?? createGeminiClient();
   const initialPrompt = buildUserPrompt(chunk, context);
+  const modelToUse = options?.model || getPrimaryModel();
 
   let initialResponse: GeminiResponseLike;
   try {
     initialResponse = await executeWithRateLimitRetry(
-      () => callGemini(client, initialPrompt),
+      () => callGemini(client, initialPrompt, modelToUse),
       options
     );
   } catch (err: unknown) {
@@ -415,7 +438,7 @@ export async function reviewChunk(
   let retryResponse: GeminiResponseLike;
   try {
     retryResponse = await executeWithRateLimitRetry(
-      () => callGemini(client, retryPrompt),
+      () => callGemini(client, retryPrompt, modelToUse),
       options
     );
   } catch (err: unknown) {
@@ -441,8 +464,12 @@ function getThinkingLevel(): ThinkingLevel {
   return ThinkingLevel.LOW;
 }
 
-async function callGemini(client: GoogleGenAI, prompt: string): Promise<GeminiResponseLike> {
-  const model = process.env.GEMINI_MODEL || CONFIG.GEMINI_MODEL;
+async function callGemini(
+  client: GoogleGenAI,
+  prompt: string,
+  modelOverride?: string
+): Promise<GeminiResponseLike> {
+  const model = modelOverride || getPrimaryModel();
   const maxOutputTokens = getMaxOutputTokens();
   const response = await client.models.generateContent({
     model,

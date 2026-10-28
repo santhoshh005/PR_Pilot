@@ -93,6 +93,7 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
 | `GEMINI_API_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Google Gemini API key from Google AI Studio. |
 | `CRON_SECRET` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Bearer authorization token protecting `/api/cron/process-reviews`. |
 | `GEMINI_MODEL` | **Runtime-Only** | Vercel / `.env.local` | No | Model name (default: `gemini-3.8-flash`). |
+| `GEMINI_FALLBACK_MODEL` | **Runtime-Only** | Vercel / `.env.local` | No | Optional backup model ID on 503 unavailable (e.g. `gemini-3.5-flash-lite`). |
 | `GEMINI_DAILY_LIMIT` | **Runtime-Only** | Vercel / `.env.local` | No | Daily request budget cap (e.g. `15` free tier, `1500` standard). |
 | `GEMINI_CONCURRENCY` | **Runtime-Only** | Vercel / `.env.local` | No | Max concurrent chunk LLM requests (default: `2`). |
 | `GEMINI_THINKING_LEVEL` | **Runtime-Only** | Vercel / `.env.local` | No | Thinking budget for Flash models: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` (default: `LOW`). |

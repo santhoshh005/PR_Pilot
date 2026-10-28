@@ -135,6 +135,28 @@ describe("GitHub Review Poster — Unit & Sanitization", () => {
     expect(summary).toContain("src/huge1.ts");
     expect(summary).toContain("src/huge2.ts");
   });
+
+  it("adds 'Reviewed with <model id>' to the summary footer when modelUsed is provided", () => {
+    const fullReview: FullReviewResult = {
+      summary: "Analysis completed.",
+      risk_score: 10,
+      severity_counts: { critical: 0, warning: 0, suggestion: 1, praise: 0 },
+      comments: [],
+    };
+
+    const summaryWithModel = buildReviewSummaryBody({
+      repoId: "repo-uuid-1",
+      fullReview,
+      reviewDurationMs: 15000,
+      chunkCount: 1,
+      otherNotes: [],
+      omittedCommentsCount: 0,
+      modelUsed: "gemini-3.5-flash-lite",
+    });
+
+    expect(summaryWithModel).toContain("Reviewed with gemini-3.5-flash-lite");
+    expect(summaryWithModel).toContain("<sub>Reviewed with gemini-3.5-flash-lite</sub>");
+  });
 });
 
 describe("postReviewToGitHub — Integration with Mocked Octokit", () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { processReview, combineSmallChunks, collectValidLines } from "./processor";
 import { validateAndFilterComments } from "./poster";
 import { DiffChunk } from "@/types";
@@ -915,6 +915,7 @@ describe("Review Processor / Orchestrator", () => {
       expect(geminiSpy).toHaveBeenCalledTimes(1);
       expect(geminiSpy).toHaveBeenCalledWith(
         expect.objectContaining({ index: 1, file_path: "file2.ts" }),
+        expect.anything(),
         expect.anything()
       );
 
@@ -957,6 +958,209 @@ describe("Review Processor / Orchestrator", () => {
           delete process.env.GEMINI_DAILY_LIMIT;
         }
       }
+    });
+
+    describe("GEMINI_FALLBACK_MODEL on 503 Unavailable", () => {
+      const origFallback = process.env.GEMINI_FALLBACK_MODEL;
+      const origModel = process.env.GEMINI_MODEL;
+
+      afterEach(() => {
+        if (origFallback !== undefined) {
+          process.env.GEMINI_FALLBACK_MODEL = origFallback;
+        } else {
+          delete process.env.GEMINI_FALLBACK_MODEL;
+        }
+        if (origModel !== undefined) {
+          process.env.GEMINI_MODEL = origModel;
+        } else {
+          delete process.env.GEMINI_MODEL;
+        }
+      });
+
+      it("tries fallback model and succeeds when primary model fails with 503, counting usage for both attempts", async () => {
+        process.env.GEMINI_MODEL = "gemini-3.8-flash";
+        process.env.GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite";
+
+        const rpcSpy = vi.spyOn(mockSupabase, "rpc").mockResolvedValue({
+          data: true,
+          error: null,
+        });
+
+        const reviewChunkSpy = vi
+          .spyOn(geminiReview, "reviewChunk")
+          .mockRejectedValueOnce(new geminiReview.UnavailableError("503 Service Unavailable"))
+          .mockResolvedValueOnce({
+            chunk_summary: "Fallback review succeeded.",
+            comments: [],
+            severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+          });
+
+        await processReview(dummyJobId);
+
+        // Should call reviewChunk twice: first with primary model, then with fallback model
+        expect(reviewChunkSpy).toHaveBeenCalledTimes(2);
+        expect(reviewChunkSpy).toHaveBeenNthCalledWith(
+          1,
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ model: "gemini-3.8-flash" })
+        );
+        expect(reviewChunkSpy).toHaveBeenNthCalledWith(
+          2,
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ model: "gemini-3.5-flash-lite", maxRateLimitRetries: 0 })
+        );
+
+        // Daily usage counted for both attempts
+        const reserveCalls = rpcSpy.mock.calls.filter((c) => c[0] === "reserve_daily_api_usage");
+        expect(reserveCalls.length).toBe(2);
+
+        // Job completes successfully
+        const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+        expect(job?.status).toBe("completed");
+
+        // Chunk status is completed
+        const chunk = mockDb.review_chunks.find((c) => c.job_id === dummyJobId);
+        expect(chunk?.status).toBe("completed");
+      });
+
+      it("records gemini:unavailable:status=503:primary+fallback and marks chunk retry_later when both primary and fallback fail with 503", async () => {
+        process.env.GEMINI_MODEL = "gemini-3.8-flash";
+        process.env.GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite";
+
+        const rpcSpy = vi.spyOn(mockSupabase, "rpc").mockResolvedValue({
+          data: true,
+          error: null,
+        });
+
+        const reviewChunkSpy = vi
+          .spyOn(geminiReview, "reviewChunk")
+          .mockRejectedValueOnce(new geminiReview.UnavailableError("503 Primary Unavailable"))
+          .mockRejectedValueOnce(new geminiReview.UnavailableError("503 Fallback Unavailable"));
+
+        await processReview(dummyJobId);
+
+        expect(reviewChunkSpy).toHaveBeenCalledTimes(2);
+
+        // Daily usage counted for both attempts
+        const reserveCalls = rpcSpy.mock.calls.filter((c) => c[0] === "reserve_daily_api_usage");
+        expect(reserveCalls.length).toBe(2);
+
+        // Job is queued for retry with exact diagnostic string
+        const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+        expect(job?.status).toBe("queued");
+        expect(job?.retry_count).toBe(1);
+        expect(job?.error_message).toBe("gemini:unavailable:status=503:primary+fallback");
+
+        // Chunk status is retry_later
+        const chunk = mockDb.review_chunks.find((c) => c.job_id === dummyJobId);
+        expect(chunk?.status).toBe("retry_later");
+      });
+
+      it("does NOT use fallback model for 400 bad_request or auth error and reserves usage only once", async () => {
+        process.env.GEMINI_MODEL = "gemini-3.8-flash";
+        process.env.GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite";
+
+        const rpcSpy = vi.spyOn(mockSupabase, "rpc").mockResolvedValue({
+          data: true,
+          error: null,
+        });
+
+        const badReqErr = new geminiReview.GeminiReviewError("bad_request", "status=400");
+        const reviewChunkSpy = vi
+          .spyOn(geminiReview, "reviewChunk")
+          .mockRejectedValueOnce(badReqErr);
+
+        await processReview(dummyJobId);
+
+        // Fallback model NOT called
+        expect(reviewChunkSpy).toHaveBeenCalledTimes(1);
+
+        // Usage reserved only once
+        const reserveCalls = rpcSpy.mock.calls.filter((c) => c[0] === "reserve_daily_api_usage");
+        expect(reserveCalls.length).toBe(1);
+
+        const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+        expect(job?.status).toBe("queued");
+        expect(job?.error_message).toBe("gemini:bad_request:status=400");
+      });
+
+      it("does NOT use fallback model when fallback budget reservation fails, setting retry_later", async () => {
+        process.env.GEMINI_MODEL = "gemini-3.8-flash";
+        process.env.GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite";
+
+        let callNum = 0;
+        vi.spyOn(mockSupabase, "rpc").mockImplementation(async (fn: string) => {
+          if (fn === "reserve_daily_api_usage") {
+            callNum++;
+            if (callNum === 1) return { data: true, error: null };
+            return { data: false, error: null }; // second reservation exhausted
+          }
+          return { data: null, error: null };
+        });
+
+        const reviewChunkSpy = vi
+          .spyOn(geminiReview, "reviewChunk")
+          .mockRejectedValueOnce(new geminiReview.UnavailableError("503 Primary Unavailable"));
+
+        await processReview(dummyJobId);
+
+        // Fallback reviewChunk NOT called because budget was exhausted on attempt 2
+        expect(reviewChunkSpy).toHaveBeenCalledTimes(1);
+
+        const chunk = mockDb.review_chunks.find((c) => c.job_id === dummyJobId);
+        expect(chunk?.status).toBe("retry_later");
+      });
+
+      it("rejects invalid fallback model id and does NOT call fallback on 503", async () => {
+        process.env.GEMINI_MODEL = "gemini-3.8-flash";
+        process.env.GEMINI_FALLBACK_MODEL = "invalid with spaces";
+
+        const rpcSpy = vi.spyOn(mockSupabase, "rpc").mockResolvedValue({
+          data: true,
+          error: null,
+        });
+
+        const reviewChunkSpy = vi
+          .spyOn(geminiReview, "reviewChunk")
+          .mockRejectedValueOnce(new geminiReview.UnavailableError("503 Primary Unavailable"));
+
+        await processReview(dummyJobId);
+
+        expect(reviewChunkSpy).toHaveBeenCalledTimes(1);
+        const reserveCalls = rpcSpy.mock.calls.filter((c) => c[0] === "reserve_daily_api_usage");
+        expect(reserveCalls.length).toBe(1);
+
+        const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+        expect(job?.status).toBe("queued");
+        expect(job?.error_message).toBe("gemini:unavailable:status=503");
+      });
+
+      it("ensures stored error_message never leaks secrets, code, prompts or response content", async () => {
+        process.env.GEMINI_MODEL = "gemini-3.8-flash";
+        process.env.GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite";
+
+        vi.spyOn(mockSupabase, "rpc").mockResolvedValue({
+          data: true,
+          error: null,
+        });
+
+        const sensitiveFake = "AIzaSyFakeKey12345secret";
+        const sensitiveErr = new geminiReview.UnavailableError(`503 with ${sensitiveFake}`);
+        vi.spyOn(geminiReview, "reviewChunk")
+          .mockRejectedValueOnce(sensitiveErr)
+          .mockRejectedValueOnce(sensitiveErr);
+
+        await processReview(dummyJobId);
+
+        const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+        const err = job?.error_message || "";
+        expect(err).toBe("gemini:unavailable:status=503:primary+fallback");
+        expect(err).not.toContain(sensitiveFake);
+        expect(err).not.toContain("def run_command");
+        expect(err).not.toContain("diff");
+      });
     });
   });
 });

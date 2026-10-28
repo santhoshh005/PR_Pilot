@@ -8,6 +8,8 @@ import {
   CHUNK_REVIEW_RESPONSE_SCHEMA,
   ReviewContext,
   getMaxOutputTokens,
+  getPrimaryModel,
+  getFallbackModel,
   formatGeminiErrorReason,
   GeminiReviewError,
 } from "./review";
@@ -492,6 +494,30 @@ describe("reviewChunk - with mocked Gemini API", () => {
     }
   });
 
+  it("uses options.model override when provided in ReviewOptions", async () => {
+    const mockGenerateContent = vi.fn().mockResolvedValue({
+      text: JSON.stringify(sampleReviewJson),
+    });
+
+    const mockClient = {
+      models: {
+        generateContent: mockGenerateContent,
+      },
+    } as unknown as GoogleGenAI;
+
+    await reviewChunk(
+      dummyChunk,
+      {
+        ...dummyContext,
+        client: mockClient,
+      },
+      { model: "gemini-3.5-flash-lite" }
+    );
+
+    const callArgs = mockGenerateContent.mock.calls[0][0];
+    expect(callArgs.model).toBe("gemini-3.5-flash-lite");
+  });
+
   describe("GEMINI_MAX_OUTPUT_TOKENS Configuration", () => {
     const originalTokens = process.env.GEMINI_MAX_OUTPUT_TOKENS;
 
@@ -532,6 +558,81 @@ describe("reviewChunk - with mocked Gemini API", () => {
 
       process.env.GEMINI_MAX_OUTPUT_TOKENS = "65536";
       expect(getMaxOutputTokens()).toBe(65536);
+    });
+  });
+
+  describe("GEMINI_FALLBACK_MODEL Configuration & Validation", () => {
+    const originalFallback = process.env.GEMINI_FALLBACK_MODEL;
+    const originalPrimary = process.env.GEMINI_MODEL;
+
+    afterEach(() => {
+      if (originalFallback === undefined) {
+        delete process.env.GEMINI_FALLBACK_MODEL;
+      } else {
+        process.env.GEMINI_FALLBACK_MODEL = originalFallback;
+      }
+      if (originalPrimary === undefined) {
+        delete process.env.GEMINI_MODEL;
+      } else {
+        process.env.GEMINI_MODEL = originalPrimary;
+      }
+    });
+
+    it("returns null when GEMINI_FALLBACK_MODEL is unset", () => {
+      delete process.env.GEMINI_FALLBACK_MODEL;
+      expect(getFallbackModel()).toBeNull();
+    });
+
+    it("returns GEMINI_MODEL when set or falls back to CONFIG.GEMINI_MODEL for primary model", () => {
+      delete process.env.GEMINI_MODEL;
+      expect(getPrimaryModel()).toBe(CONFIG.GEMINI_MODEL);
+
+      process.env.GEMINI_MODEL = "gemini-3.8-flash";
+      expect(getPrimaryModel()).toBe("gemini-3.8-flash");
+    });
+
+    it("returns null when GEMINI_FALLBACK_MODEL is empty or whitespace", () => {
+      process.env.GEMINI_FALLBACK_MODEL = "   ";
+      expect(getFallbackModel()).toBeNull();
+    });
+
+    it("returns null when GEMINI_FALLBACK_MODEL equals GEMINI_MODEL", () => {
+      process.env.GEMINI_MODEL = "gemini-3.8-flash";
+      process.env.GEMINI_FALLBACK_MODEL = "gemini-3.8-flash";
+      expect(getFallbackModel()).toBeNull();
+    });
+
+    it("returns null when GEMINI_FALLBACK_MODEL equals the default primary model", () => {
+      delete process.env.GEMINI_MODEL;
+      process.env.GEMINI_FALLBACK_MODEL = CONFIG.GEMINI_MODEL;
+      expect(getFallbackModel()).toBeNull();
+    });
+
+    it("rejects invalid fallback ids with spaces, slashes, or special symbols", () => {
+      process.env.GEMINI_FALLBACK_MODEL = "gemini flash lite";
+      expect(getFallbackModel()).toBeNull();
+
+      process.env.GEMINI_FALLBACK_MODEL = "models/gemini-3.5-flash-lite";
+      expect(getFallbackModel()).toBeNull();
+
+      process.env.GEMINI_FALLBACK_MODEL = "gemini_3.5_flash_lite";
+      expect(getFallbackModel()).toBeNull();
+
+      process.env.GEMINI_FALLBACK_MODEL = "gemini;rm-rf";
+      expect(getFallbackModel()).toBeNull();
+    });
+
+    it("rejects excessively long fallback model ids (> 64 chars)", () => {
+      process.env.GEMINI_FALLBACK_MODEL = "a".repeat(65);
+      expect(getFallbackModel()).toBeNull();
+    });
+
+    it("accepts valid fallback model ids composed of letters, digits, dots, and hyphens", () => {
+      process.env.GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite";
+      expect(getFallbackModel()).toBe("gemini-3.5-flash-lite");
+
+      process.env.GEMINI_FALLBACK_MODEL = "gemini-2.5-flash";
+      expect(getFallbackModel()).toBe("gemini-2.5-flash");
     });
   });
 

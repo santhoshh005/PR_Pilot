@@ -98,6 +98,7 @@ After clicking **Create GitHub App**:
 | `GEMINI_API_KEY` | **Runtime-Only** (Serverless functions) | **Yes** | Google AI Studio API key | **`[YOU]`** |
 | `CRON_SECRET` | **Runtime-Only** (Serverless functions) | **Yes** | 32-byte hex string from `openssl rand -hex 32` | **`[YOU]`** |
 | `GEMINI_MODEL` | **Runtime-Only** (Serverless functions) | No | Default: `gemini-3.8-flash` (or `gemini-2.5-flash`) | **`[YOU]`** |
+| `GEMINI_FALLBACK_MODEL` | **Runtime-Only** (Serverless functions) | No | Optional backup model ID on 503 (e.g. `gemini-3.5-flash-lite`, Config type in Vercel) | **`[YOU]`** |
 | `GEMINI_DAILY_LIMIT` | **Runtime-Only** (Serverless functions) | No | Daily request cap (e.g. `15` for free tier, `1500` for standard) | **`[YOU]`** |
 | `GEMINI_CONCURRENCY` | **Runtime-Only** (Serverless functions) | No | Max concurrent chunk LLM calls (default: `2`) | **`[YOU]`** |
 | `GEMINI_THINKING_LEVEL` | **Runtime-Only** (Serverless functions) | No | Supported: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` (default: `LOW`) | **`[YOU]`** |

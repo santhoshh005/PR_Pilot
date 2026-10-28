@@ -22,6 +22,7 @@ export interface PostReviewParams {
   unreviewedFiles?: string[];
   maxInlineComments?: number;
   alreadyReviewedSha?: boolean;
+  modelUsed?: string;
 }
 
 export interface PostReviewResult {
@@ -120,6 +121,7 @@ function prepareReviewPayload(params: PostReviewParams) {
     omittedCommentsCount: omittedCount,
     unreviewedFiles: params.unreviewedFiles,
     jobStatus: params.jobStatus,
+    modelUsed: params.modelUsed,
   });
 
   return {
@@ -527,6 +529,7 @@ export function buildReviewSummaryBody(params: {
   omittedCommentsCount: number;
   unreviewedFiles?: string[];
   jobStatus?: ReviewJobStatus | "partial" | "deferred";
+  modelUsed?: string;
 }): string {
   const {
     repoId,
@@ -537,6 +540,7 @@ export function buildReviewSummaryBody(params: {
     omittedCommentsCount,
     unreviewedFiles,
     jobStatus,
+    modelUsed,
   } = params;
 
   const durationSec = Math.round(reviewDurationMs / 1000);
@@ -562,6 +566,10 @@ export function buildReviewSummaryBody(params: {
   }
 
   body += `\n---\n<sub>Reviewed by [PRPilot](https://github.com/apps/prpilot) • ${durationSec}s • ${chunkCount} chunk(s) analyzed</sub>`;
+
+  if (modelUsed) {
+    body += `\n<sub>Reviewed with ${modelUsed}</sub>`;
+  }
 
   return body;
 }
