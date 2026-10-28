@@ -148,11 +148,31 @@ export function classifyThrownError(err: unknown): GeminiReviewError {
     return new GeminiReviewError("rate_limit", "status=429");
   }
 
-  if (msg.includes("unavailable") || msg.includes("high demand")) {
-    return new GeminiReviewError("unavailable", "status=503");
+  if (
+    msg.includes("unavailable") ||
+    msg.includes("high demand") ||
+    msg.includes("fetch failed") ||
+    msg.includes("connection") ||
+    msg.includes("econnreset") ||
+    msg.includes("enotfound")
+  ) {
+    const detail =
+      msg.includes("fetch failed") || msg.includes("connection") || msg.includes("econnreset") || msg.includes("enotfound")
+        ? "connection_error"
+        : "status=503";
+    return new GeminiReviewError("unavailable", detail);
   }
 
-  return new GeminiReviewError("unknown", "status=none");
+  if (msg.includes("timeout") || msg.includes("timed out")) {
+    return new GeminiReviewError("unknown", "status=timeout");
+  }
+
+  const errName =
+    err instanceof Error ? err.name.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 30) : "none";
+  return new GeminiReviewError(
+    "unknown",
+    `status=none${errName !== "Error" && errName !== "none" ? `,type=${errName}` : ""}`
+  );
 }
 
 export function formatGeminiErrorReason(err: unknown): string {
@@ -456,12 +476,19 @@ export async function reviewChunk(
   throw retryCheck.error;
 }
 
-function getThinkingLevel(): ThinkingLevel {
+export function getThinkingConfig(model: string): { thinkingLevel: ThinkingLevel } | undefined {
   const envLevel = process.env.GEMINI_THINKING_LEVEL?.toUpperCase();
-  if (envLevel === "MINIMAL") return ThinkingLevel.MINIMAL;
-  if (envLevel === "MEDIUM") return ThinkingLevel.MEDIUM;
-  if (envLevel === "HIGH") return ThinkingLevel.HIGH;
-  return ThinkingLevel.LOW;
+  if (envLevel === "MINIMAL") return { thinkingLevel: ThinkingLevel.MINIMAL };
+  if (envLevel === "MEDIUM") return { thinkingLevel: ThinkingLevel.MEDIUM };
+  if (envLevel === "HIGH") return { thinkingLevel: ThinkingLevel.HIGH };
+  if (envLevel === "LOW") return { thinkingLevel: ThinkingLevel.LOW };
+
+  // Only default to LOW on Gemini 3+ models; earlier models error if thinkingConfig is set
+  if (/gemini-3/i.test(model)) {
+    return { thinkingLevel: ThinkingLevel.LOW };
+  }
+
+  return undefined;
 }
 
 async function callGemini(
@@ -471,19 +498,24 @@ async function callGemini(
 ): Promise<GeminiResponseLike> {
   const model = modelOverride || getPrimaryModel();
   const maxOutputTokens = getMaxOutputTokens();
+  const thinkingConfig = getThinkingConfig(model);
+
+  const config: Record<string, unknown> = {
+    systemInstruction: SYSTEM_PROMPT,
+    responseMimeType: "application/json",
+    responseSchema: CHUNK_REVIEW_RESPONSE_SCHEMA,
+    temperature: 0.2,
+    maxOutputTokens,
+  };
+
+  if (thinkingConfig) {
+    config.thinkingConfig = thinkingConfig;
+  }
+
   const response = await client.models.generateContent({
     model,
     contents: prompt,
-    config: {
-      systemInstruction: SYSTEM_PROMPT,
-      responseMimeType: "application/json",
-      responseJsonSchema: CHUNK_REVIEW_RESPONSE_SCHEMA,
-      temperature: 0.2,
-      maxOutputTokens,
-      thinkingConfig: {
-        thinkingLevel: getThinkingLevel(),
-      },
-    },
+    config,
   });
 
   return response as unknown as GeminiResponseLike;
@@ -525,7 +557,11 @@ export function isRetryableError(err: unknown): boolean {
     message.includes("resource_exhausted") ||
     message.includes("rate limit") ||
     message.includes("503") ||
-    message.includes("unavailable")
+    message.includes("unavailable") ||
+    message.includes("fetch failed") ||
+    message.includes("connection") ||
+    message.includes("econnreset") ||
+    message.includes("enotfound")
   );
 }
 
@@ -534,7 +570,14 @@ export function isUnavailableError(err: unknown): boolean {
   if (err instanceof GeminiReviewError) return err.category === "unavailable";
   if (!(err instanceof Error)) return false;
   const message = err.message.toLowerCase();
-  return message.includes("503") || message.includes("unavailable");
+  return (
+    message.includes("503") ||
+    message.includes("unavailable") ||
+    message.includes("fetch failed") ||
+    message.includes("connection") ||
+    message.includes("econnreset") ||
+    message.includes("enotfound")
+  );
 }
 
 function sleep(ms: number): Promise<void> {

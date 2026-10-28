@@ -12,6 +12,10 @@ import {
   getFallbackModel,
   formatGeminiErrorReason,
   GeminiReviewError,
+  classifyThrownError,
+  isUnavailableError,
+  isRetryableError,
+  getThinkingConfig,
 } from "./review";
 import { DiffChunk, CONFIG } from "@/types";
 import { GoogleGenAI } from "@google/genai";
@@ -278,6 +282,7 @@ describe("reviewChunk - with mocked Gemini API", () => {
     expect(callArgs.config.temperature).toBe(0.2);
     expect(callArgs.config.maxOutputTokens).toBe(4096);
     expect(callArgs.config.responseMimeType).toBe("application/json");
+    expect(callArgs.config.responseSchema).toBe(CHUNK_REVIEW_RESPONSE_SCHEMA);
     expect(callArgs.config.systemInstruction).toBe(SYSTEM_PROMPT);
   });
 
@@ -693,6 +698,50 @@ describe("reviewChunk - with mocked Gemini API", () => {
     it("formats 'unknown' category with HTTP status or default", () => {
       const err = new GeminiReviewError("unknown", "status=500");
       expect(formatGeminiErrorReason(err)).toBe("gemini:unknown:status=500");
+    });
+
+    it("classifies network connection errors as unavailable and chunk timeouts as unknown timeout", () => {
+      const timeoutErr = new Error("Chunk review timed out after 90000ms");
+      const classifiedTimeout = classifyThrownError(timeoutErr);
+      expect(classifiedTimeout.category).toBe("unknown");
+      expect(classifiedTimeout.sanitizedReason).toBe("gemini:unknown:status=timeout");
+      expect(isUnavailableError(timeoutErr)).toBe(false);
+
+      const fetchErr = new TypeError("fetch failed");
+      const classifiedFetch = classifyThrownError(fetchErr);
+      expect(classifiedFetch.category).toBe("unavailable");
+      expect(classifiedFetch.sanitizedReason).toBe("gemini:unavailable:connection_error");
+      expect(isUnavailableError(fetchErr)).toBe(true);
+      expect(isRetryableError(fetchErr)).toBe(true);
+    });
+
+    it("includes safe error type in unknown error classification", () => {
+      const syntaxErr = new SyntaxError("Unexpected token < in JSON at position 0");
+      const classified = classifyThrownError(syntaxErr);
+      expect(classified.category).toBe("unknown");
+      expect(classified.sanitizedReason).toBe("gemini:unknown:status=none,type=SyntaxError");
+    });
+
+    it("handles getThinkingConfig for Gemini 3 vs earlier models", () => {
+      const originalEnv = process.env.GEMINI_THINKING_LEVEL;
+      delete process.env.GEMINI_THINKING_LEVEL;
+
+      // Gemini 3 models default to LOW thinking level
+      expect(getThinkingConfig("gemini-3.8-flash")).toEqual({ thinkingLevel: "LOW" });
+
+      // Earlier models omit thinkingConfig by default to avoid API error
+      expect(getThinkingConfig("gemini-2.5-flash")).toBeUndefined();
+      expect(getThinkingConfig("gemini-1.5-flash")).toBeUndefined();
+
+      // Explicit env var overrides
+      process.env.GEMINI_THINKING_LEVEL = "HIGH";
+      expect(getThinkingConfig("gemini-2.5-flash")).toEqual({ thinkingLevel: "HIGH" });
+
+      if (originalEnv !== undefined) {
+        process.env.GEMINI_THINKING_LEVEL = originalEnv;
+      } else {
+        delete process.env.GEMINI_THINKING_LEVEL;
+      }
     });
 
     it("strictly truncates formatted reason to 400 characters", () => {
