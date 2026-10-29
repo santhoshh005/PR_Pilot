@@ -103,6 +103,7 @@ After clicking **Create GitHub App**:
 | `GEMINI_CONCURRENCY` | **Runtime-Only** (Serverless functions) | No | Max concurrent chunk LLM calls (default: `2`) | **`[YOU]`** |
 | `GEMINI_THINKING_LEVEL` | **Runtime-Only** (Serverless functions) | No | Supported: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` (default: `LOW`) | **`[YOU]`** |
 | `GEMINI_MAX_OUTPUT_TOKENS` | **Runtime-Only** (Serverless functions) | No | Integer between 1024 and 65536 (default: `4096`) | **`[YOU]`** |
+| `GEMINI_CHUNK_TIMEOUT_MS` | **Runtime-Only** (Serverless functions) | No | Per-chunk review timeout in milliseconds (default: `120000` = 2 minutes) | **`[YOU]`** |
 
 ### Build Tolerance & Secrets
 - **Build Tolerance**: Next.js (`pnpm build`) compiles cleanly **even if GitHub credentials (`GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`) are not yet set**. Octokit client initialization is strictly lazy inside request handlers (`getAppOctokit`, `getInstallationOctokit`), and all API routes and dashboard pages are dynamically evaluated at request time.
@@ -193,7 +194,7 @@ Follow this exact sequence to deploy without circular URL or credential dependen
   - Under **Repository variables**, add:
     - Name: `APP_URL`
     - Value: `https://<your-project>.vercel.app` (no trailing slash).
-- [ ] **`[AGENT]`** Confirmed `.github/workflows/cron.yml` runs on `*/30 * * * *` without external action dependencies and skips cleanly if `APP_URL` is unset.
+- [ ] **`[AGENT]`** Confirmed `.github/workflows/cron.yml` runs on `*/10 * * * *` without external action dependencies and skips cleanly if `APP_URL` is unset.
 
 ### Step 9: Install GitHub App & Verify End-to-End
 - [ ] **`[YOU]`** In GitHub App Settings > **Install App**, click **Install** next to your personal account.

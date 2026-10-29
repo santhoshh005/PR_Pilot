@@ -2,10 +2,8 @@ name: Review Processor Cron
 
 on:
   schedule:
-    # Runs every 30 minutes by default on UTC.
-    # Note: If the repository is public or you have sufficient GitHub Actions minutes,
-    # this schedule can be customized (for example to every 5 minutes: '*/5 * * * *').
-    - cron: '*/30 * * * *'
+    # Runs every 10 minutes on UTC (or customized to 5 minutes on public repositories)
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 jobs:

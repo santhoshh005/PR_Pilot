@@ -500,18 +500,25 @@ async function executeChunkReviews(
   const pendingChunks = chunks.filter((c) => !completedChunkMap.has(c.index));
 
   for (let i = 0; i < pendingChunks.length; i += concurrency) {
-    if (Date.now() >= deadline) {
+    const remainingTime = deadline - Date.now();
+    if (remainingTime < 5000) {
       reachedDeadline = true;
       break;
     }
 
     const batch = pendingChunks.slice(i, i + concurrency);
+    const effectiveTimeout = Math.min(chunkTimeoutMs, remainingTime);
     const batchPromises = batch.map((chunk) =>
-      processSingleChunk(supabase, jobId, chunk, context, chunkTimeoutMs)
+      processSingleChunk(supabase, jobId, chunk, context, effectiveTimeout)
     );
 
     const batchResults = await Promise.all(batchPromises);
     executionResults.push(...batchResults);
+
+    if (Date.now() >= deadline && i + concurrency < pendingChunks.length) {
+      reachedDeadline = true;
+      break;
+    }
   }
 
   if (executionResults.length < chunks.length) {
@@ -530,6 +537,7 @@ async function processSingleChunk(
 ): Promise<ChunkExecutionResult> {
   const primaryModel = getPrimaryModel();
   const fallbackModels = getFallbackModels();
+  const chunkDeadline = Date.now() + timeoutMs;
 
   try {
     const reserved = await reserveUsage(supabase, 1);
@@ -539,7 +547,12 @@ async function processSingleChunk(
       throw quotaErr;
     }
 
-    const result = await reviewWithTimeout(chunk, context, timeoutMs, {
+    const primaryTimeout = chunkDeadline - Date.now();
+    if (primaryTimeout <= 0) {
+      throw new Error(`Chunk review timed out after ${timeoutMs}ms`);
+    }
+
+    const result = await reviewWithTimeout(chunk, context, primaryTimeout, {
       model: primaryModel,
     });
 
@@ -568,6 +581,11 @@ async function processSingleChunk(
       let allFallbackUnavailable = true;
 
       for (const fallbackModel of fallbackModels) {
+        if (chunkDeadline <= Date.now()) {
+          // Insufficient time remaining within chunk budget for an additional model call
+          break;
+        }
+
         try {
           const reservedFallback = await reserveUsage(supabase, 1);
           if (!reservedFallback) {
@@ -587,7 +605,12 @@ async function processSingleChunk(
             };
           }
 
-          const fallbackResult = await reviewWithTimeout(chunk, context, timeoutMs, {
+          const fallbackRemaining = chunkDeadline - Date.now();
+          if (fallbackRemaining <= 0) {
+            break;
+          }
+
+          const fallbackResult = await reviewWithTimeout(chunk, context, fallbackRemaining, {
             model: fallbackModel,
             maxRateLimitRetries: 0,
           });
@@ -1007,5 +1030,5 @@ function getConcurrency(): number {
 function getChunkTimeoutMs(): number {
   return process.env.GEMINI_CHUNK_TIMEOUT_MS
     ? parseInt(process.env.GEMINI_CHUNK_TIMEOUT_MS, 10)
-    : 90_000;
+    : 120_000;
 }

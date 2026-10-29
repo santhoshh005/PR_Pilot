@@ -20,7 +20,7 @@ When a pull request is opened, synchronized, or reopened, GitHub delivers a `pul
 
 ## Latency
 
-A review takes about 1 to 2 minutes when Gemini is available. If the model is overloaded (e.g. 503 Service Unavailable) or the free-tier daily budget is used, the job is retried by a scheduled job that runs every 30 minutes at best (GitHub scheduled workflows are best-effort), so a review can be delayed by hours.
+A review takes about 1 to 2 minutes when Gemini is available. If the model is overloaded (e.g. 503 Service Unavailable) or the free-tier daily budget is used, the job is retried by a scheduled job that runs every 10 minutes at best (GitHub scheduled workflows are best-effort), so a review can be delayed by hours.
 
 ---
 
@@ -30,7 +30,7 @@ A review takes about 1 to 2 minutes when Gemini is available. If the model is ov
 - **Backend & Database**: Supabase PostgreSQL with strict Row Level Security (RLS) and serverless TypeScript route handlers.
 - **AI Engine**: Google Gemini API via `@google/genai` (structured JSON review output using primary model `GEMINI_MODEL` and optional fallback `GEMINI_FALLBACK_MODEL`).
 - **GitHub Integration**: Octokit (`@octokit/auth-app`, `@octokit/rest`, `@octokit/webhooks-methods`) for PR diff retrieval via `Contents: Read-only` permission (required by GitHub to return diffs) and automated review posting via `Pull requests: Read & write`.
-- **Hybrid Processing**: Primary path starts processing immediately in the background serverless execution via Vercel `waitUntil` upon receiving a `pull_request` webhook; fallback path uses a scheduled GitHub Actions cron to recover stuck, queued, or deferred jobs (every 30 minutes on private repositories, every 5 minutes on public repositories).
+- **Hybrid Processing**: Primary path starts processing immediately in the background serverless execution via Vercel `waitUntil` upon receiving a `pull_request` webhook; fallback path uses a scheduled GitHub Actions cron to recover stuck, queued, or deferred jobs (every 10 minutes by default, or every 5 minutes on public repositories).
 
 ---
 
@@ -118,6 +118,7 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
 | `GEMINI_CONCURRENCY` | **Runtime-Only** | Vercel / `.env.local` | No | Max concurrent chunk LLM requests (default: `2`). |
 | `GEMINI_THINKING_LEVEL` | **Runtime-Only** | Vercel / `.env.local` | No | Thinking budget for Flash models: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` (default: `LOW`). |
 | `GEMINI_MAX_OUTPUT_TOKENS` | **Runtime-Only** | Vercel / `.env.local` | No | Maximum token limit for Gemini output (1024–65536, default: `4096`). |
+| `GEMINI_CHUNK_TIMEOUT_MS` | **Runtime-Only** | Vercel / `.env.local` | No | Per-chunk review timeout in milliseconds (default: `120000` = 2 minutes). |
 
 > [!NOTE]
 > Next.js inlines `NEXT_PUBLIC_*` variables into client-side JavaScript bundles at build time. Changing any `NEXT_PUBLIC_*` variable in Vercel Project Settings requires triggering a **Redeploy** for changes to take effect in the browser. Server-only runtime variables are read on-demand by Serverless Functions. Build tolerance allows `next build` to complete successfully even when GitHub runtime credentials are unset during initial provisioning.
@@ -149,7 +150,7 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
 - **Personal-account installations only**: Organization installations are ignored in v1 (`account_type === 'User'` enforced during installation sync).
 - **Head commit deduplication**: Two pull requests within the same repository that share the identical head commit SHA reuse the single review result.
 - **Initial repository sync & backfill**: When repositories are first synced (via the "Sync Repositories" button in the dashboard or upon initial installation), PRPilot automatically backfills open, non-draft pull requests (up to 5 per repository, capped at 20 total per sync) and enqueues them as pending review jobs. Subsequent PR reviews are triggered via `pull_request` webhooks.
-- **Review trigger and cron fallback cadence**: A `pull_request` webhook starts processing immediately in the background serverless execution via `@vercel/functions` `waitUntil`. The scheduled cron (`POST /api/cron/process-reviews` via `.github/workflows/cron.yml`) is solely a fallback safety net for stuck, queued, or deferred jobs (running every 30 minutes on a private repository, or every 5 minutes on a public one).
+- **Review trigger and cron fallback cadence**: A `pull_request` webhook starts processing immediately in the background serverless execution via `@vercel/functions` `waitUntil`. The scheduled cron (`POST /api/cron/process-reviews` via `.github/workflows/cron.yml`) is solely a fallback safety net for stuck, queued, or deferred jobs (running every 10 minutes by default, or every 5 minutes on a public repository).
 - **Postgres-backed rate limiter (fails open with memory fallback)**: The rate limiter uses Postgres exclusively (`rate_limits` table with atomic RPC `check_rate_limit`) with no external caching dependencies. All protected routes—webhook (`/api/webhook`), fallback cron (`/api/cron/process-reviews`), auth (`/api/auth/callback`, `/api/auth/signout`), and dashboard API (`/api/repos`, `/api/repos/[repoId]/*`)—fail open (`failOpen: true`) using an in-memory sliding window fallback if the limiter encounters a database error, preventing service outages during transient database connectivity hiccups. The `rate_limits` table enforces a bounded 50,000 row hard cap with eager expired row pruning.
 - **Repository content access & AI analysis boundary**: The app can read repository contents of the repositories it is installed on (it only fetches pull request diffs and sends them to the Gemini API for analysis), and users should install it only on repositories they are comfortable sending to Google's Gemini API; the free tier's data-use terms may differ from paid, to be checked by the user.
 
@@ -200,7 +201,7 @@ For a detailed step-by-step checklist with `[YOU]` vs `[AGENT]` responsibility m
 
 The fallback review processor is triggered by GitHub Actions in `.github/workflows/cron.yml` to resume incomplete or stale reviews:
 
-- Schedule: runs every 30 minutes (`*/30 * * * *`) by default (or every 5 minutes if configured).
+- Schedule: runs every 10 minutes (`*/10 * * * *`) by default (or every 5 minutes if configured).
 - Requires two repository settings in GitHub:
   1. **Repository secret** `CRON_SECRET`: matches the `CRON_SECRET` in Vercel.
   2. **Repository variable** `APP_URL`: your production app URL (e.g. `https://prpilot.vercel.app`, no trailing slash).
