@@ -26,8 +26,8 @@ graph LR
 | Dashboard UI | Next.js App Router (RSC + client) | Shows repos, reviews, charts |
 | Auth | Supabase Auth with GitHub OAuth provider | Sign in, session management |
 | Database | Supabase Postgres with RLS | All persistent state |
-| AI engine | Gemini API via `@google/genai` | Code review generation |
-| GitHub integration | Octokit (`@octokit/rest`, `@octokit/auth-app`) | Fetch diffs, post comments |
+| AI engine | Gemini API via `@google/genai` | Code review generation via primary model `GEMINI_MODEL` and optional fallback `GEMINI_FALLBACK_MODEL` |
+| GitHub integration | Octokit (`@octokit/rest`, `@octokit/auth-app`) | Fetch diffs via `Contents: Read-only` permission (required by GitHub to return PR diffs) and post comments |
 
 ## Webhook-to-Comment Pipeline
 
@@ -113,8 +113,8 @@ For jobs that didn't complete in `waitUntil` (very large PRs, or if the function
 ### 1. Queue-in-DB instead of external queue (SQS, RabbitMQ, etc.)
 A `review_jobs` Postgres table with `SELECT ... FOR UPDATE SKIP LOCKED` acts as a job queue. **Why**: Zero additional infrastructure, free tier compatible, transactional with the rest of the data, and `SKIP LOCKED` prevents duplicate processing if cron overlaps.
 
-### 2. Gemini 3.8 Flash for reviews (not 3.5 Flash or Pro)
-`gemini-3.8-flash` is the most capable Flash model, free tier, 1M token context, structured output support. **Why**: Handles large diffs in a single call per chunk, reducing latency and API calls versus a less capable model that needs more retries.
+### 2. Gemini Model Strategy & Resilience (`GEMINI_MODEL` & `GEMINI_FALLBACK_MODEL`)
+The primary model is configured via `GEMINI_MODEL` (default: `gemini-3.8-flash`, configurable to e.g. `gemini-3.5-flash-lite`), offering high throughput, 1M token context, and structured output support. If the primary model encounters temporary service unavailability (HTTP 503), the processor automatically makes fallback attempts using model(s) specified in `GEMINI_FALLBACK_MODEL` (e.g. `gemini-3.5-flash-lite,gemini-2.5-flash`), ensuring resilient reviews even during upstream peak demand. **Why**: Handles diffs efficiently in a single call per chunk with automated fallback resilience, avoiding job abandonment on transient 503 errors.
 
 ### 3. `waitUntil` primary + GitHub Actions Cron fallback (not queue-only, not separate worker)
 The webhook handler uses `waitUntil` from `@vercel/functions` to process reviews in-band after responding, with a GitHub Actions scheduled workflow (every 30 minutes by default, 5 minutes if the repository is public) as a safety net for incomplete jobs. **Why**: Achieves < 30s median review latency, avoids Vercel Hobby cron limitations, and gracefully handles the 300s timeout with a 250s deadline.

@@ -23,7 +23,7 @@ import {
   ReviewOptions,
   formatGeminiErrorReason,
   getPrimaryModel,
-  getFallbackModel,
+  getFallbackModels,
 } from "@/lib/gemini/review";
 import { mergeChunkResults } from "@/lib/review/merger";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -529,7 +529,7 @@ async function processSingleChunk(
   timeoutMs: number
 ): Promise<ChunkExecutionResult> {
   const primaryModel = getPrimaryModel();
-  const fallbackModel = getFallbackModel();
+  const fallbackModels = getFallbackModels();
 
   try {
     const reserved = await reserveUsage(supabase, 1);
@@ -563,71 +563,82 @@ async function processSingleChunk(
     // Only attempt fallback if primary failed with an unavailable error and budget was not exhausted
     const isPrimaryUnavailable = !isBudgetExhausted && isUnavailableError(primaryErr);
 
-    if (isPrimaryUnavailable && fallbackModel) {
-      try {
-        const reservedFallback = await reserveUsage(supabase, 1);
-        if (!reservedFallback) {
-          // Budget exhausted for fallback attempt; chunk stays retry_later with primary 503 error
+    if (isPrimaryUnavailable && fallbackModels.length > 0) {
+      let lastFallbackErr: unknown = primaryErr;
+      let allFallbackUnavailable = true;
+
+      for (const fallbackModel of fallbackModels) {
+        try {
+          const reservedFallback = await reserveUsage(supabase, 1);
+          if (!reservedFallback) {
+            // Budget exhausted for fallback attempt; chunk stays retry_later with primary 503 error
+            await supabase
+              .from("review_chunks")
+              .update({ status: "retry_later" })
+              .eq("job_id", jobId)
+              .eq("chunk_index", chunk.index);
+
+            return {
+              chunkIndex: chunk.index,
+              filePath: chunk.file_path,
+              result: null,
+              status: "retry_later",
+              errorReason: formatGeminiErrorReason(primaryErr),
+            };
+          }
+
+          const fallbackResult = await reviewWithTimeout(chunk, context, timeoutMs, {
+            model: fallbackModel,
+            maxRateLimitRetries: 0,
+          });
+
           await supabase
             .from("review_chunks")
-            .update({ status: "retry_later" })
+            .update({ status: "completed", review_json: fallbackResult })
             .eq("job_id", jobId)
             .eq("chunk_index", chunk.index);
 
           return {
             chunkIndex: chunk.index,
             filePath: chunk.file_path,
-            result: null,
-            status: "retry_later",
-            errorReason: formatGeminiErrorReason(primaryErr),
+            result: fallbackResult,
+            status: "completed",
+            modelUsed: fallbackModel,
           };
+        } catch (fallbackErr: unknown) {
+          lastFallbackErr = fallbackErr;
+          const isFallbackBudgetExhausted =
+            (fallbackErr as { message?: string })?.message?.includes("Daily Gemini API budget exhausted");
+          const fallbackUnavailable =
+            isFallbackBudgetExhausted ||
+            isUnavailableError(fallbackErr) ||
+            (fallbackErr as { isUnavailable?: boolean })?.isUnavailable === true;
+
+          if (!fallbackUnavailable) {
+            allFallbackUnavailable = false;
+            break;
+          }
         }
-
-        const fallbackResult = await reviewWithTimeout(chunk, context, timeoutMs, {
-          model: fallbackModel,
-          maxRateLimitRetries: 0,
-        });
-
-        await supabase
-          .from("review_chunks")
-          .update({ status: "completed", review_json: fallbackResult })
-          .eq("job_id", jobId)
-          .eq("chunk_index", chunk.index);
-
-        return {
-          chunkIndex: chunk.index,
-          filePath: chunk.file_path,
-          result: fallbackResult,
-          status: "completed",
-          modelUsed: fallbackModel,
-        };
-      } catch (fallbackErr: unknown) {
-        const isFallbackBudgetExhausted =
-          (fallbackErr as { message?: string })?.message?.includes("Daily Gemini API budget exhausted");
-        const fallbackUnavailable =
-          isFallbackBudgetExhausted ||
-          isUnavailableError(fallbackErr) ||
-          (fallbackErr as { isUnavailable?: boolean })?.isUnavailable === true;
-
-        const status = fallbackUnavailable ? "retry_later" : "error";
-        const errorReason = fallbackUnavailable
-          ? "gemini:unavailable:status=503:primary+fallback"
-          : formatGeminiErrorReason(fallbackErr);
-
-        await supabase
-          .from("review_chunks")
-          .update({ status })
-          .eq("job_id", jobId)
-          .eq("chunk_index", chunk.index);
-
-        return {
-          chunkIndex: chunk.index,
-          filePath: chunk.file_path,
-          result: null,
-          status,
-          errorReason,
-        };
       }
+
+      const status = allFallbackUnavailable ? "retry_later" : "error";
+      const errorReason = allFallbackUnavailable
+        ? "gemini:unavailable:status=503:primary+fallback"
+        : formatGeminiErrorReason(lastFallbackErr);
+
+      await supabase
+        .from("review_chunks")
+        .update({ status })
+        .eq("job_id", jobId)
+        .eq("chunk_index", chunk.index);
+
+      return {
+        chunkIndex: chunk.index,
+        filePath: chunk.file_path,
+        result: null,
+        status,
+        errorReason,
+      };
     }
 
     const isUnavailable =

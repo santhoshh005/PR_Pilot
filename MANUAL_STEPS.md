@@ -97,8 +97,8 @@ After clicking **Create GitHub App**:
 | `SUPABASE_SERVICE_ROLE_KEY` | **Runtime-Only** (Serverless functions) | **Yes** | Supabase service-role secret key (bypasses RLS on server) | **`[YOU]`** |
 | `GEMINI_API_KEY` | **Runtime-Only** (Serverless functions) | **Yes** | Google AI Studio API key | **`[YOU]`** |
 | `CRON_SECRET` | **Runtime-Only** (Serverless functions) | **Yes** | 32-byte hex string from `openssl rand -hex 32` | **`[YOU]`** |
-| `GEMINI_MODEL` | **Runtime-Only** (Serverless functions) | No | Default: `gemini-3.8-flash` (or `gemini-2.5-flash`) | **`[YOU]`** |
-| `GEMINI_FALLBACK_MODEL` | **Runtime-Only** (Serverless functions) | No | Optional backup model ID on 503 (e.g. `gemini-3.5-flash-lite`, Config type in Vercel) | **`[YOU]`** |
+| `GEMINI_MODEL` | **Runtime-Only** (Serverless functions) | No | Primary Gemini model ID (default: `gemini-3.8-flash`, recommended: `gemini-3.5-flash-lite`) | **`[YOU]`** |
+| `GEMINI_FALLBACK_MODEL` | **Runtime-Only** (Serverless functions) | No | Optional backup model ID or comma-separated list on 503 (e.g. `gemini-3.5-flash-lite,gemini-2.5-flash`, Config type in Vercel) | **`[YOU]`** |
 | `GEMINI_DAILY_LIMIT` | **Runtime-Only** (Serverless functions) | No | Daily request cap (e.g. `15` for free tier, `1500` for standard) | **`[YOU]`** |
 | `GEMINI_CONCURRENCY` | **Runtime-Only** (Serverless functions) | No | Max concurrent chunk LLM calls (default: `2`) | **`[YOU]`** |
 | `GEMINI_THINKING_LEVEL` | **Runtime-Only** (Serverless functions) | No | Supported: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` (default: `LOW`) | **`[YOU]`** |
@@ -134,6 +134,8 @@ Follow this exact sequence to deploy without circular URL or credential dependen
   - `NEXT_PUBLIC_APP_URL`: `https://<your-project>.vercel.app`
   - `SUPABASE_SERVICE_ROLE_KEY`: `<your-supabase-service-role-key>`
   - `GEMINI_API_KEY`: `<your-gemini-api-key>`
+  - `GEMINI_MODEL`: `gemini-3.5-flash-lite` (or `gemini-3.8-flash`)
+  - `GEMINI_FALLBACK_MODEL`: `gemini-2.5-flash,gemini-2.5-flash-lite`
   - `CRON_SECRET`: `<generated-32-byte-hex-secret>`
   *(Leave GitHub variables unset for now; the initial build does not require them)*.
 - [ ] **`[YOU]`** Click **Deploy**. The build will succeed and confirm your live production domain.

@@ -150,13 +150,14 @@ This document covers all security threats specific to a GitHub App that processe
 
 ---
 
-## 11. Gemini API Key Exposure
+## 11. Gemini API Key Exposure & Model Configuration
 
-**Threat**: The `GEMINI_API_KEY` is leaked in logs, client bundles, or error messages.
+**Threat**: The `GEMINI_API_KEY` is leaked in logs, client bundles, or error messages, or unvalidated models cause runtime issues.
 
 **Mitigations**:
 - [ ] Store as `GEMINI_API_KEY` Vercel env var (not `NEXT_PUBLIC_` prefix).
 - [ ] Only used in server-side code (`src/lib/gemini/client.ts`).
+- [ ] Primary model is configured via `GEMINI_MODEL` (defaults to `gemini-3.8-flash`, configurable to `gemini-3.5-flash-lite`), and fallback model(s) via `GEMINI_FALLBACK_MODEL` on 503 unavailable. Both model ID variables are strictly validated as alphanumeric/dot/hyphen identifiers up to 64 characters to eliminate injection risks.
 - [ ] Error messages from the Gemini client are sanitized before logging — strip any auth headers or key fragments.
 
 ---
@@ -209,6 +210,8 @@ This document covers all security threats specific to a GitHub App that processe
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Vercel | No | Supabase anon key (safe for client) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Vercel | **Yes** | Supabase service role (bypasses RLS) |
 | `GEMINI_API_KEY` | Vercel | **Yes** | Gemini API key |
+| `GEMINI_MODEL` | Vercel | No | Primary Gemini model ID (default: `gemini-3.8-flash`, configurable e.g. `gemini-3.5-flash-lite`) |
+| `GEMINI_FALLBACK_MODEL` | Vercel | No | Optional backup model ID(s) on 503 unavailable (e.g. `gemini-3.5-flash-lite,gemini-2.5-flash`) |
 | `CRON_SECRET` | Vercel | **Yes** | Protects cron endpoint |
 | `NEXT_PUBLIC_APP_URL` | Vercel | No | Base application URL (`http://localhost:3000` or `https://<app>.vercel.app`) for OAuth redirects and host allow-listing |
 | `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL` | Vercel | No | Direct URL to install the GitHub App, displayed in dashboard empty state |

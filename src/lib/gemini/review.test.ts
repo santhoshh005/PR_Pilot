@@ -10,6 +10,7 @@ import {
   getMaxOutputTokens,
   getPrimaryModel,
   getFallbackModel,
+  getFallbackModels,
   formatGeminiErrorReason,
   GeminiReviewError,
   classifyThrownError,
@@ -637,6 +638,14 @@ describe("reviewChunk - with mocked Gemini API", () => {
       expect(getFallbackModel()).toBe("gemini-3.5-flash-lite");
 
       process.env.GEMINI_FALLBACK_MODEL = "gemini-2.5-flash";
+      expect(getFallbackModel()).toBe("gemini-2.5-flash");
+    });
+
+    it("parses multiple comma-separated fallback models in order and filters out primary and invalid models", () => {
+      process.env.GEMINI_MODEL = "gemini-3.5-flash-lite";
+      process.env.GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite, gemini-2.5-flash, invalid_model!, gemini-2.5-flash-lite";
+
+      expect(getFallbackModels()).toEqual(["gemini-2.5-flash", "gemini-2.5-flash-lite"]);
       expect(getFallbackModel()).toBe("gemini-2.5-flash");
     });
   });

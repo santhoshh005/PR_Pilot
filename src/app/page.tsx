@@ -105,7 +105,7 @@ export default async function HomePage() {
                 Verified Line Comments
               </div>
               <p className="text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                Every review comment is validated against git diff hunks before posting. Zero misplaced comments.
+                Every inline comment is checked against the diff before posting; comments that do not match are moved to the summary.
               </p>
             </div>
             <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-xs">
@@ -113,7 +113,7 @@ export default async function HomePage() {
                 Gemini Intelligence
               </div>
               <p className="text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                Structured output with strict severity scoring (critical, warning, suggestion, nitpick) and actionable code fixes.
+                Structured output with strict severity scoring (critical, warning, suggestion, praise) and actionable code fixes.
               </p>
             </div>
             <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-xs">
@@ -121,7 +121,7 @@ export default async function HomePage() {
                 Custom Strictness
               </div>
               <p className="text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                Configure ignored paths, custom prompts, and review strictness per repository right from your dashboard.
+                Configure ignored paths, custom instructions, and review strictness per repository right from your dashboard.
               </p>
             </div>
           </div>

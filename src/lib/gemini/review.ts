@@ -57,21 +57,42 @@ export function getPrimaryModel(): string {
   return process.env.GEMINI_MODEL?.trim() || CONFIG.GEMINI_MODEL;
 }
 
+export function getFallbackModels(): string[] {
+  const raw = process.env.GEMINI_FALLBACK_MODEL?.trim();
+  if (!raw) return [];
+
+  const primary = getPrimaryModel();
+  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  const valid: string[] = [];
+
+  for (const part of parts) {
+    if (/^[a-zA-Z0-9.-]{1,64}$/.test(part) && part !== primary && !valid.includes(part)) {
+      valid.push(part);
+    }
+  }
+  return valid;
+}
+
 export function getFallbackModel(): string | null {
   const raw = process.env.GEMINI_FALLBACK_MODEL?.trim();
   if (!raw) return null;
 
-  // Validated as a short string of letters, digits, dots and hyphens only
-  if (!/^[a-zA-Z0-9.-]{1,64}$/.test(raw)) {
-    return null;
+  // Preserves strict contract for single-model environment variables
+  if (!raw.includes(",")) {
+    if (!/^[a-zA-Z0-9.-]{1,64}$/.test(raw)) {
+      return null;
+    }
+
+    const primary = getPrimaryModel();
+    if (raw === primary) {
+      return null;
+    }
+
+    return raw;
   }
 
-  const primary = getPrimaryModel();
-  if (raw === primary) {
-    return null;
-  }
-
-  return raw;
+  const models = getFallbackModels();
+  return models[0] ?? null;
 }
 
 export function extractHttpStatus(err: unknown): number | undefined {

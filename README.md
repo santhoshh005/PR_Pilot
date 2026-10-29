@@ -4,12 +4,32 @@ PRPilot is an autonomous AI-powered GitHub App that automatically reviews pull r
 
 ---
 
+## How It Works
+
+When a pull request is opened, synchronized, or reopened, GitHub delivers a `pull_request` webhook to PRPilot (`POST /api/webhook`). The webhook handler verifies the HMAC-SHA256 signature, deduplicates the delivery ID against the `webhook_deliveries` table, creates a pending job in `review_jobs`, and immediately kicks off review processing in the background using serverless execution (`waitUntil`). The review processor fetches the PR unified diff from GitHub using the read-only Contents permission (required by GitHub to return pull request diffs; read-only guarantees the app cannot modify repository code), chunks the diff, and sends each chunk to Google Gemini (`GEMINI_MODEL`, with optional fallback to `GEMINI_FALLBACK_MODEL` on 503 unavailable errors) with a strict structured JSON schema. The chunk reviews are merged, an overall risk score is calculated, inline comments are validated against diff hunks (comments that do not match the diff are moved to the summary), and the review is posted to GitHub via Octokit. If a background job is interrupted by serverless execution limits or deferred due to rate limits or daily budget caps, a scheduled GitHub Actions cron (`POST /api/cron/process-reviews`) acts as a fallback safety net to claim and complete pending, deferred, or stale jobs.
+
+---
+
+## Demo
+
+| PR Review Comment | Dashboard Repositories | Review Details |
+|:---:|:---:|:---:|
+| ![PR Review](docs/screenshots/pr-review.png) | ![Dashboard](docs/screenshots/dashboard.png) | ![Review Detail](docs/screenshots/review-detail.png) |
+
+---
+
+## Latency
+
+A review takes about 1 to 2 minutes when Gemini is available. If the model is overloaded (e.g. 503 Service Unavailable) or the free-tier daily budget is used, the job is retried by a scheduled job that runs every 30 minutes at best (GitHub scheduled workflows are best-effort), so a review can be delayed by hours.
+
+---
+
 ## Architecture Overview
 
 - **Frontend & App Router**: Next.js 16 (React 19, Turbopack, Tailwind CSS v4, Lucide Icons, Recharts).
 - **Backend & Database**: Supabase PostgreSQL with strict Row Level Security (RLS) and serverless TypeScript route handlers.
-- **AI Engine**: Google Gemini API via `@google/genai` (structured JSON review output).
-- **GitHub Integration**: Octokit (`@octokit/auth-app`, `@octokit/rest`, `@octokit/webhooks-methods`) for PR diff retrieval and automated review posting.
+- **AI Engine**: Google Gemini API via `@google/genai` (structured JSON review output using primary model `GEMINI_MODEL` and optional fallback `GEMINI_FALLBACK_MODEL`).
+- **GitHub Integration**: Octokit (`@octokit/auth-app`, `@octokit/rest`, `@octokit/webhooks-methods`) for PR diff retrieval via `Contents: Read-only` permission (required by GitHub to return diffs) and automated review posting via `Pull requests: Read & write`.
 - **Hybrid Processing**: Primary path starts processing immediately in the background serverless execution via Vercel `waitUntil` upon receiving a `pull_request` webhook; fallback path uses a scheduled GitHub Actions cron to recover stuck, queued, or deferred jobs (every 30 minutes on private repositories, every 5 minutes on public repositories).
 
 ---
@@ -92,8 +112,8 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
 | `SUPABASE_SERVICE_ROLE_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Supabase service-role secret key (bypasses RLS on server only). |
 | `GEMINI_API_KEY` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Google Gemini API key from Google AI Studio. |
 | `CRON_SECRET` | **Runtime-Only** | Vercel / `.env.local` | **Yes** | Bearer authorization token protecting `/api/cron/process-reviews`. |
-| `GEMINI_MODEL` | **Runtime-Only** | Vercel / `.env.local` | No | Model name (default: `gemini-3.8-flash`). |
-| `GEMINI_FALLBACK_MODEL` | **Runtime-Only** | Vercel / `.env.local` | No | Optional backup model ID on 503 unavailable (e.g. `gemini-3.5-flash-lite`). |
+| `GEMINI_MODEL` | **Runtime-Only** | Vercel / `.env.local` | No | Primary Gemini model ID (default: `gemini-3.8-flash`; configurable e.g. `gemini-3.5-flash-lite` or `gemini-2.5-flash`). |
+| `GEMINI_FALLBACK_MODEL` | **Runtime-Only** | Vercel / `.env.local` | No | Optional backup model ID or comma-separated list on 503 unavailable (e.g. `gemini-3.5-flash-lite,gemini-2.5-flash`). |
 | `GEMINI_DAILY_LIMIT` | **Runtime-Only** | Vercel / `.env.local` | No | Daily request budget cap (e.g. `15` free tier, `1500` standard). |
 | `GEMINI_CONCURRENCY` | **Runtime-Only** | Vercel / `.env.local` | No | Max concurrent chunk LLM requests (default: `2`). |
 | `GEMINI_THINKING_LEVEL` | **Runtime-Only** | Vercel / `.env.local` | No | Thinking budget for Flash models: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` (default: `LOW`). |

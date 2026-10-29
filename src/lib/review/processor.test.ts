@@ -1025,6 +1025,57 @@ describe("Review Processor / Orchestrator", () => {
         expect(chunk?.status).toBe("completed");
       });
 
+      it("tries multiple fallback models in sequence when previous fallback fails with 503", async () => {
+        process.env.GEMINI_MODEL = "gemini-3.8-flash";
+        process.env.GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite, gemini-2.5-flash";
+
+        const rpcSpy = vi.spyOn(mockSupabase, "rpc").mockResolvedValue({
+          data: true,
+          error: null,
+        });
+
+        // 1st call (primary) -> 503
+        // 2nd call (fallback 1: 3.5-flash-lite) -> 503
+        // 3rd call (fallback 2: 2.5-flash) -> succeeds
+        const reviewChunkSpy = vi
+          .spyOn(geminiReview, "reviewChunk")
+          .mockRejectedValueOnce(new geminiReview.UnavailableError("503 Service Unavailable"))
+          .mockRejectedValueOnce(new geminiReview.UnavailableError("503 Service Unavailable"))
+          .mockResolvedValueOnce({
+            chunk_summary: "Fallback review 2 succeeded.",
+            comments: [],
+            severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+          });
+
+        await processReview(dummyJobId);
+
+        expect(reviewChunkSpy).toHaveBeenCalledTimes(3);
+        expect(reviewChunkSpy).toHaveBeenNthCalledWith(
+          1,
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ model: "gemini-3.8-flash" })
+        );
+        expect(reviewChunkSpy).toHaveBeenNthCalledWith(
+          2,
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ model: "gemini-3.5-flash-lite", maxRateLimitRetries: 0 })
+        );
+        expect(reviewChunkSpy).toHaveBeenNthCalledWith(
+          3,
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ model: "gemini-2.5-flash", maxRateLimitRetries: 0 })
+        );
+
+        const reserveCalls = rpcSpy.mock.calls.filter((c) => c[0] === "reserve_daily_api_usage");
+        expect(reserveCalls.length).toBe(3);
+
+        const job = mockDb.review_jobs.find((j) => j.id === dummyJobId);
+        expect(job?.status).toBe("completed");
+      });
+
       it("records gemini:unavailable:status=503:primary+fallback and marks chunk retry_later when both primary and fallback fail with 503", async () => {
         process.env.GEMINI_MODEL = "gemini-3.8-flash";
         process.env.GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite";
