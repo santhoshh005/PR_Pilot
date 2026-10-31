@@ -12,9 +12,29 @@ When a pull request is opened, synchronized, or reopened, GitHub delivers a `pul
 
 ## Demo
 
-| PR Review Comment | Dashboard Repositories | Review Details |
-|:---:|:---:|:---:|
-| ![PR Review](docs/screenshots/pr-review.png) | ![Dashboard](docs/screenshots/dashboard.png) | ![Review Detail](docs/screenshots/review-detail.png) |
+### Pull Request Review Comment
+![PRPilot automated code review comment on a GitHub pull request](docs/screenshots/pr-review.png)
+*Automated review comment posted on a pull request with risk assessment and actionable findings.*
+
+### Dashboard Repository Card
+![PRPilot dashboard repository card](docs/screenshots/dashboard.png)
+*Repository overview card showing active webhook status, review counts, and latest risk score.*
+
+### Review Detail — Overview
+![Review detail overview and executive summary](docs/screenshots/review-detail_1.png)
+*Review details page showing pull request metadata, executive summary, and overall risk score.*
+
+### Review Detail — Severity Breakdown
+![Review detail severity counts and issues breakdown](docs/screenshots/review-detail_2.png)
+*Detailed breakdown of identified critical vulnerabilities, warnings, and suggestions.*
+
+### Review Detail — Inline Code Suggestions
+![Review detail inline comment suggestions](docs/screenshots/review-detail_3.png)
+*Inline code recommendations with diff suggestions for pinpointed security flaws.*
+
+### Review Detail — File Analysis
+![Review detail file analysis and diagnostics](docs/screenshots/review-detail_4.png)
+*File-level analysis and execution diagnostics for all reviewed diff chunks.*
 
 ---
 
