@@ -201,7 +201,7 @@ All required environment variables defined in `SECURITY.md` and `.env.local.exam
 
 ## Deployment Sequence & Vercel Configuration
 
-For a detailed step-by-step checklist with `[YOU]` vs `[AGENT]` responsibility markers, consult [`MANUAL_STEPS.md`](./MANUAL_STEPS.md). To avoid circular dependency traps:
+For a detailed step-by-step checklist with `[YOU]` vs `[AGENT]` responsibility markers, consult the [Deployment guide](./docs/DEPLOYMENT.md). To avoid circular dependency traps:
 
 1. **Push Code**: Commit and push all code to GitHub on `main`.
 2. **Initial Vercel Import & Domain Claim**: Import repository into Vercel, assign project name to claim canonical domain (`https://<your-project>.vercel.app`), populate known Supabase, Gemini, and Cron variables, and deploy.

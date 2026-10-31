@@ -1,5 +1,5 @@
 -- Migration: Rate Limiting Table and Atomic Function
--- PLAN.md Task 13: Rate Limiter
+-- Rate Limiter
 
 CREATE TABLE IF NOT EXISTS public.rate_limits (
     key TEXT PRIMARY KEY,

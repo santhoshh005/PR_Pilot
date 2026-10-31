@@ -157,7 +157,7 @@ export async function checkRateLimit(
   }
 }
 
-// --- In-Memory Sliding Window Implementation (PLAN.md Task 13) ---
+// --- In-Memory Sliding Window Implementation ---
 
 interface InMemoryEntry {
   count: number;

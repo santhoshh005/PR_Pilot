@@ -1,6 +1,6 @@
-# PRPilot — Manual Setup & Deployment Checklist
+# Deployment guide
 
-This document details all configuration, provisioning, and deployment steps required to run PRPilot in production. Steps requiring personal account login, private credentials, or administrative privileges are marked **`[YOU]`**. Steps handled by the assistant or automated build pipelines are marked **`[AGENT]`**.
+This document details all configuration, provisioning, and deployment steps required to run PRPilot in production. Steps requiring personal account login, private credentials, or administrative privileges are marked **`[YOU]`**. Steps handled by automated build pipelines or CLI tooling are marked **`[AUTOMATED]`**.
 
 ---
 

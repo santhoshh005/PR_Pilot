@@ -41,3 +41,7 @@ pnpm-debug.log*
 Thumbs.db
 *.tsbuildinfo
 next-env.d.ts
+
+# internal agent notes
+PLAN.md
+FLASH_RULES.md

@@ -205,7 +205,7 @@ describe("Rate Limiting Utilities", () => {
   });
 
   describe("Endpoint Helpers and Configured Limits", () => {
-    it("configures limits matching PLAN.md", () => {
+    it("configures expected rate limit specifications", () => {
       expect(RATE_LIMITS.WEBHOOK).toEqual({ limit: 60, windowSeconds: 60 });
       expect(RATE_LIMITS.DASHBOARD).toEqual({ limit: 30, windowSeconds: 60 });
       expect(RATE_LIMITS.CRON).toEqual({ limit: 1, windowSeconds: 60 });
