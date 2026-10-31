@@ -2,10 +2,8 @@ name: Review Processor Cron
 
 on:
   schedule:
-    # Runs every 30 minutes while the repository is private (to conserve GitHub Actions minutes).
-    # Once the repository is made public, GitHub Actions minutes are free and unlimited for public repositories,
-    # so this schedule can be changed to every 5 or 10 minutes (e.g. '*/5 * * * *' or '*/10 * * * *').
-    - cron: '*/30 * * * *'
+    # Runs every 10 minutes on UTC now that the repository is public (free and unlimited Actions minutes)
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 jobs:

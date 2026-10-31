@@ -194,7 +194,7 @@ Follow this exact sequence to deploy without circular URL or credential dependen
   - Under **Repository variables**, add:
     - Name: `APP_URL`
     - Value: `https://<your-project>.vercel.app` (no trailing slash).
-- [ ] **`[AGENT]`** Confirmed `.github/workflows/cron.yml` runs on `*/30 * * * *` while private without external action dependencies and skips cleanly if `APP_URL` is unset (when making the repository public, update the cron schedule to `*/5 * * * *` or `*/10 * * * *` to use the documented public cadence with free Actions minutes).
+- [ ] **`[AGENT]`** Confirmed `.github/workflows/cron.yml` runs on `*/10 * * * *` on the public repository without external action dependencies and skips cleanly if `APP_URL` is unset.
 
 ### Step 9: Install GitHub App & Verify End-to-End
 - [ ] **`[YOU]`** In GitHub App Settings > **Install App**, click **Install** next to your personal account.

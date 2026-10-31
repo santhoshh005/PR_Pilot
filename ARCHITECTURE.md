@@ -47,7 +47,7 @@ sequenceDiagram
   WH->>DB: INSERT review_jobs (status=pending)
   WH-->>GH: 200 OK (< 3s)
 
-  Note over CRON: GitHub Actions Cron (every 30 min by default, 5 or 10 if repo is public)<br/>calls /api/cron/process-reviews
+  Note over CRON: GitHub Actions Cron (every 10 min on public repo)<br/>calls /api/cron/process-reviews
   CRON->>DB: SELECT pending review_jobs (LIMIT 3, FOR UPDATE SKIP LOCKED)
   CRON->>DB: UPDATE status=processing
   CRON->>GHAPI: GET /repos/{owner}/{repo}/pulls/{number} (Accept: diff)
@@ -82,15 +82,15 @@ sequenceDiagram
 
 For jobs that didn't complete in `waitUntil` (very large PRs, or if the function was recycled):
 
-1. **Cron route** (`/api/cron/process-reviews`): Triggered by a GitHub Actions scheduled workflow (`.github/workflows/cron.yml`) every 30 minutes by default while private (5 or 10 minutes if the repository is public) with `CRON_SECRET` header. (Vercel Cron is not used due to Hobby plan daily frequency restrictions).
-2. Route sets `export const maxDuration = 300`. Picks jobs with `status = 'processing'` that have been stale for > 3 minutes, or `status = 'pending'` (missed by `waitUntil`). Worst-case stale recovery time: with a 180s (3-minute) stale threshold and a 30-minute cron interval, a stuck job will wait up to ~33 minutes before being picked up and recovered (or ~8 minutes if the public 5-minute schedule is configured).
+1. **Cron route** (`/api/cron/process-reviews`): Triggered by a GitHub Actions scheduled workflow (`.github/workflows/cron.yml`) every 10 minutes on the public repository with `CRON_SECRET` header. (Vercel Cron is not used due to Hobby plan daily frequency restrictions).
+2. Route sets `export const maxDuration = 300`. Picks jobs with `status = 'processing'` that have been stale for > 3 minutes, or `status = 'pending'` (missed by `waitUntil`). Worst-case stale recovery time: with a 180s (3-minute) stale threshold and a 10-minute cron interval, a stuck job will wait up to ~13 minutes before being picked up and recovered (or ~8 minutes if customized to 5 minutes).
 3. Uses `SELECT ... FOR UPDATE SKIP LOCKED` to prevent duplicate processing.
 4. Resumes from the last completed chunk and continues with the same 250s hard deadline budget.
 
 ### Why this hybrid works
 
 - **Median latency < 30s**: Most PRs (< 5 files) finish in a single `waitUntil` call, giving near-instant reviews.
-- **No extra infrastructure**: Uses Vercel Fluid Compute for execution and free GitHub Actions for the 30-minute private (or 5–10 minute public) schedule trigger.
+- **No extra infrastructure**: Uses Vercel Fluid Compute for execution and free GitHub Actions for the 10-minute schedule trigger on the public repository.
 - **Graceful degradation**: The cron catches anything `waitUntil` misses.
 - **Free tier safe**: Fluid Compute only bills active CPU time. I/O wait (Gemini API latency) doesn't count, so typical usage stays well under 4h/month.
 
@@ -117,7 +117,7 @@ A `review_jobs` Postgres table with `SELECT ... FOR UPDATE SKIP LOCKED` acts as 
 The primary model is configured via `GEMINI_MODEL` (default: `gemini-3.8-flash`, configurable to e.g. `gemini-3.5-flash-lite`), offering high throughput, 1M token context, and structured output support. If the primary model encounters temporary service unavailability (HTTP 503), the processor automatically makes fallback attempts using model(s) specified in `GEMINI_FALLBACK_MODEL` (e.g. `gemini-3.5-flash-lite,gemini-2.5-flash`), ensuring resilient reviews even during upstream peak demand. **Why**: Handles diffs efficiently in a single call per chunk with automated fallback resilience, avoiding job abandonment on transient 503 errors.
 
 ### 3. `waitUntil` primary + GitHub Actions Cron fallback (not queue-only, not separate worker)
-The webhook handler uses `waitUntil` from `@vercel/functions` to process reviews in-band after responding, with a GitHub Actions scheduled workflow (every 30 minutes by default while private, 5 or 10 minutes if the repository is public) as a safety net for incomplete jobs. **Why**: Achieves < 30s median review latency, avoids Vercel Hobby cron limitations, and gracefully handles the 300s timeout with a 250s deadline.
+The webhook handler uses `waitUntil` from `@vercel/functions` to process reviews in-band after responding, with a GitHub Actions scheduled workflow (every 10 minutes on the public repository) as a safety net for incomplete jobs. **Why**: Achieves < 30s median review latency, avoids Vercel Hobby cron limitations, and gracefully handles the 300s timeout with a 250s deadline.
 
 ### 4. Supabase Auth with GitHub OAuth (not custom OAuth flow)
 Supabase Auth handles the OAuth dance, session tokens, and refresh. **Why**: Eliminates ~300 lines of auth code, provides secure cookie-based sessions via `@supabase/ssr`, and the GitHub provider gives us the user's verified GitHub identity for RLS. The auth callback (`/api/auth/callback`) enforces strict host allow-listing using `NEXT_PUBLIC_APP_URL` and validates relative redirect paths. Required Supabase redirect URL allow-list patterns are `http://localhost:3000/**` and `https://<your-app>.vercel.app/**`; dynamic Vercel preview URLs are not accepted for OAuth unless an account-scoped pattern (e.g. `https://*-<your-team-or-account-slug>.vercel.app/**`) is added to Supabase Auth and `NEXT_PUBLIC_APP_URL` matches the preview host. Dashboard empty states link directly to installation via `NEXT_PUBLIC_GITHUB_APP_INSTALL_URL`.
