@@ -13,28 +13,28 @@ When a pull request is opened, synchronized, or reopened, GitHub delivers a `pul
 ## Demo
 
 ### Pull Request Review Comment
-![PRPilot automated code review comment on a GitHub pull request](docs/screenshots/pr-review.png)
-*Automated review comment posted on a pull request with risk assessment and actionable findings.*
+![pr-review.png](docs/screenshots/pr-review.png)
+*PRPilot review comment on a pull request*
 
 ### Dashboard Repository Card
-![PRPilot dashboard repository card](docs/screenshots/dashboard.png)
-*Repository overview card showing active webhook status, review counts, and latest risk score.*
+![dashboard.png](docs/screenshots/dashboard.png)
+*Dashboard repository card*
 
-### Review Detail — Overview
-![Review detail overview and executive summary](docs/screenshots/review-detail_1.png)
-*Review details page showing pull request metadata, executive summary, and overall risk score.*
+### Review Detail (1 of 4)
+![review-detail_1.png](docs/screenshots/review-detail_1.png)
+*Review detail page (1 of 4)*
 
-### Review Detail — Severity Breakdown
-![Review detail severity counts and issues breakdown](docs/screenshots/review-detail_2.png)
-*Detailed breakdown of identified critical vulnerabilities, warnings, and suggestions.*
+### Review Detail (2 of 4)
+![review-detail_2.png](docs/screenshots/review-detail_2.png)
+*Review detail page (2 of 4)*
 
-### Review Detail — Inline Code Suggestions
-![Review detail inline comment suggestions](docs/screenshots/review-detail_3.png)
-*Inline code recommendations with diff suggestions for pinpointed security flaws.*
+### Review Detail (3 of 4)
+![review-detail_3.png](docs/screenshots/review-detail_3.png)
+*Review detail page (3 of 4)*
 
-### Review Detail — File Analysis
-![Review detail file analysis and diagnostics](docs/screenshots/review-detail_4.png)
-*File-level analysis and execution diagnostics for all reviewed diff chunks.*
+### Review Detail (4 of 4)
+![review-detail_4.png](docs/screenshots/review-detail_4.png)
+*Review detail page (4 of 4)*
 
 ---
 
