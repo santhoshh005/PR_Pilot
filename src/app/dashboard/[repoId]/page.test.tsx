@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 let mockUser: { id: string } | null = null;
@@ -96,6 +96,12 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 describe("Repo Reviews Page (RSC)", { timeout: 15000 }, () => {
+  // Pay the cold module-graph import (page + recharts) once, outside per-test timeouts,
+  // so the first tests don't time out when the full suite runs in parallel workers.
+  beforeAll(async () => {
+    await import("./page");
+  }, 60_000);
+
   const validRepoId = "11111111-2222-4333-8444-555555555555";
 
   beforeEach(() => {

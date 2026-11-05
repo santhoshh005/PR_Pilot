@@ -40,6 +40,7 @@ function createMockSupabaseClient() {
       let pendingInsert: Record<string, unknown>[] | null = null;
       let pendingUpdate: Record<string, unknown> | null = null;
       let pendingUpsert: Record<string, unknown>[] | null = null;
+      let pendingDelete = false;
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Supabase query builder mock chaining interface
       const chain: any = {
@@ -65,13 +66,9 @@ function createMockSupabaseClient() {
           return chain;
         },
         delete: () => {
-          const toDelete = currentTable.filter((row) =>
-            filters.every((f) => f(row))
-          );
-          mockDb[table as keyof typeof mockDb] = currentTable.filter(
-            (row) => !toDelete.includes(row)
-          );
-          return Promise.resolve({ data: toDelete, error: null });
+          // Lazy like PostgREST: filters chained after delete() apply when awaited
+          pendingDelete = true;
+          return chain;
         },
         maybeSingle: async () => {
           const rows = currentTable.filter((row) =>
@@ -96,6 +93,15 @@ function createMockSupabaseClient() {
           return { data: rows[0], error: null };
         },
         then: (resolve: (val: unknown) => void) => {
+          if (pendingDelete) {
+            const toDelete = currentTable.filter((row) =>
+              filters.every((f) => f(row))
+            );
+            const remaining = currentTable.filter((row) => !toDelete.includes(row));
+            currentTable.length = 0;
+            currentTable.push(...remaining);
+            return resolve({ data: toDelete, error: null });
+          }
           if (pendingInsert) {
             const inserted = pendingInsert.map((r) => ({
               id: r.id || `uuid-${Math.random().toString(36).substring(2, 9)}`,
@@ -921,6 +927,68 @@ describe("Review Processor / Orchestrator", () => {
 
       expect(partialJob.status).toBe("completed");
       expect(partialJob.completed_chunks).toBe(2);
+    });
+
+    it("resumes a partial job that already saved a review row instead of treating it as a duplicate", async () => {
+      vi.spyOn(diffParser, "parseDiff").mockReturnValue([
+        { index: 0, file_path: "file1.ts", content: "+code1", token_estimate: 4000 },
+        { index: 1, file_path: "file2.ts", content: "+code2", token_estimate: 4000 },
+      ] as unknown as DiffChunk[]);
+
+      const partialJob = mockDb.review_jobs.find((j) => j.id === dummyJobId)!;
+      partialJob.status = "partial";
+
+      mockDb.review_chunks.push({
+        id: "chunk-0-id",
+        job_id: dummyJobId,
+        chunk_index: 0,
+        file_path: "file1.ts",
+        diff_content: "+code1",
+        status: "completed",
+        review_json: {
+          chunk_summary: "Existing chunk 0 review.",
+          comments: [],
+          severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+        },
+      });
+
+      // Review row written by the earlier partial run of this same job
+      mockDb.reviews.push({
+        id: "partial-review-id",
+        job_id: dummyJobId,
+        repo_id: partialJob.repo_id,
+        head_sha: partialJob.head_sha,
+        summary: "partial",
+        inline_comment_count: 1,
+      });
+      mockDb.review_comments.push({ id: "stale-comment", review_id: "partial-review-id" });
+
+      const geminiSpy = vi.spyOn(geminiReview, "reviewChunk").mockResolvedValue({
+        chunk_summary: "Newly reviewed chunk 1.",
+        comments: [],
+        severity_counts: { critical: 0, warning: 0, suggestion: 0, praise: 0 },
+      });
+
+      await processReview(dummyJobId);
+
+      expect(geminiSpy).toHaveBeenCalledTimes(1);
+      expect(partialJob.status).toBe("completed");
+      // Existing row updated in place: still exactly one review for this head_sha, stale comments replaced
+      const reviewsForSha = mockDb.reviews.filter((r) => r.head_sha === partialJob.head_sha);
+      expect(reviewsForSha).toHaveLength(1);
+      expect(reviewsForSha[0].id).toBe("partial-review-id");
+      expect(reviewsForSha[0].summary).not.toBe("partial");
+      expect(mockDb.review_comments.find((c) => c.id === "stale-comment")).toBeUndefined();
+    });
+
+    it("falls back to safe defaults for zero or malformed numeric env vars", async () => {
+      const { parsePositiveIntEnv } = await import("./processor");
+      expect(parsePositiveIntEnv(undefined, 2)).toBe(2);
+      expect(parsePositiveIntEnv("0", 2)).toBe(2);
+      expect(parsePositiveIntEnv("-3", 2)).toBe(2);
+      expect(parsePositiveIntEnv("abc", 2)).toBe(2);
+      expect(parsePositiveIntEnv("1.5", 2)).toBe(2);
+      expect(parsePositiveIntEnv(" 4 ", 2)).toBe(4);
     });
 
     it("validates GEMINI_DAILY_LIMIT as a positive bounded integer", async () => {

@@ -300,12 +300,15 @@ async function checkDuplicateShaReview(
 ): Promise<boolean> {
   const { data: existingReview } = await supabase
     .from("reviews")
-    .select("id")
+    .select("id, job_id")
     .eq("repo_id", job.repo_id)
     .eq("head_sha", job.head_sha)
     .maybeSingle();
 
   if (!existingReview) return false;
+
+  // A review written earlier by this same job (a partial run) must be resumed, not treated as a duplicate
+  if (existingReview.job_id === job.id) return false;
 
   // Duplicate SHA: complete this review job without duplicating the review row
   await supabase
@@ -966,28 +969,57 @@ async function saveReviewRecord(
   githubReviewId: number | null = null
 ): Promise<void> {
   const durationMs = Date.now() - startTime;
-  const { data: review } = await supabase
-    .from("reviews")
-    .insert({
-      job_id: job.id,
-      repo_id: job.repo_id,
-      pr_number: job.pr_number,
-      pr_title: job.pr_title,
-      pr_author: job.pr_author,
-      head_sha: job.head_sha,
-      summary: merged.summary,
-      risk_score: merged.risk_score,
-      severity_counts: merged.severity_counts,
-      inline_comment_count: merged.comments.length,
-      review_duration_ms: durationMs,
-      github_review_id: githubReviewId,
-    })
-    .select("id")
-    .single();
+  const reviewRow = {
+    job_id: job.id,
+    repo_id: job.repo_id,
+    pr_number: job.pr_number,
+    pr_title: job.pr_title,
+    pr_author: job.pr_author,
+    head_sha: job.head_sha,
+    summary: merged.summary,
+    risk_score: merged.risk_score,
+    severity_counts: merged.severity_counts,
+    inline_comment_count: merged.comments.length,
+    review_duration_ms: durationMs,
+    github_review_id: githubReviewId,
+  };
 
-  if (review && merged.comments.length > 0) {
+  // A resumed partial job already owns a review row: (repo_id, head_sha) is unique,
+  // so update it in place and replace its comments instead of inserting a duplicate.
+  const { data: existing } = await supabase
+    .from("reviews")
+    .select("id")
+    .eq("job_id", job.id)
+    .maybeSingle();
+
+  let reviewId: string | null = null;
+  if (existing) {
+    const { error: updateError } = await supabase
+      .from("reviews")
+      .update(reviewRow)
+      .eq("id", existing.id);
+    if (updateError) {
+      console.error(`[PROCESS_REVIEW] Failed to update review for job ${job.id}:`, updateError.message);
+      return;
+    }
+    await supabase.from("review_comments").delete().eq("review_id", existing.id);
+    reviewId = existing.id;
+  } else {
+    const { data: review, error: insertError } = await supabase
+      .from("reviews")
+      .insert(reviewRow)
+      .select("id")
+      .single();
+    if (insertError || !review) {
+      console.error(`[PROCESS_REVIEW] Failed to save review for job ${job.id}:`, insertError?.message);
+      return;
+    }
+    reviewId = review.id;
+  }
+
+  if (reviewId && merged.comments.length > 0) {
     const commentsToInsert = merged.comments.map((c) => ({
-      review_id: review.id,
+      review_id: reviewId,
       file_path: c.file_path,
       line_number: c.line_number,
       side: "RIGHT" as const,
@@ -996,7 +1028,10 @@ async function saveReviewRecord(
       body: c.body,
       suggestion: c.suggestion || null,
     }));
-    await supabase.from("review_comments").insert(commentsToInsert);
+    const { error: commentsError } = await supabase.from("review_comments").insert(commentsToInsert);
+    if (commentsError) {
+      console.error(`[PROCESS_REVIEW] Failed to save review comments for job ${job.id}:`, commentsError.message);
+    }
   }
 }
 
@@ -1015,20 +1050,23 @@ async function finalizeEmptyDiffJob(
     .eq("id", jobId);
 }
 
+/** Parses a positive integer env var, falling back on missing, malformed, zero or negative values. */
+export function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return fallback;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function getDeadlineMs(): number {
-  return process.env.CRON_TIMEOUT_MS
-    ? parseInt(process.env.CRON_TIMEOUT_MS, 10)
-    : CONFIG.CRON_TIMEOUT_MS;
+  return parsePositiveIntEnv(process.env.CRON_TIMEOUT_MS, CONFIG.CRON_TIMEOUT_MS);
 }
 
 function getConcurrency(): number {
-  return process.env.GEMINI_CONCURRENCY
-    ? parseInt(process.env.GEMINI_CONCURRENCY, 10)
-    : 2;
+  // A concurrency of 0 would never advance the batch loop; cap to keep within Gemini rate limits
+  return Math.min(parsePositiveIntEnv(process.env.GEMINI_CONCURRENCY, 2), 10);
 }
 
 function getChunkTimeoutMs(): number {
-  return process.env.GEMINI_CHUNK_TIMEOUT_MS
-    ? parseInt(process.env.GEMINI_CHUNK_TIMEOUT_MS, 10)
-    : 120_000;
+  return parsePositiveIntEnv(process.env.GEMINI_CHUNK_TIMEOUT_MS, 120_000);
 }

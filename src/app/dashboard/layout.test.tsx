@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 let mockUser: { id: string; user_metadata?: Record<string, unknown>; email?: string } | null = null;
@@ -28,6 +28,12 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 describe("DashboardLayout", { timeout: 15000 }, () => {
+  // Pay the cold module-graph import once, outside per-test timeouts, so the first
+  // test doesn't time out when the full suite runs across many parallel workers.
+  beforeAll(async () => {
+    await import("./layout");
+  }, 60_000);
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockUser = {

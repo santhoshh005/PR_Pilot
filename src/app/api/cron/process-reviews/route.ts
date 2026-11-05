@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { CONFIG, ReviewJob } from "@/types";
 import { createServiceClient } from "@/lib/supabase/service";
-import { processReview } from "@/lib/review/processor";
+import { getDailyLimit, processReview } from "@/lib/review/processor";
 import { checkCronRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export const maxDuration = 300;
@@ -148,9 +148,7 @@ async function executeClaimedBatch(
 async function checkCanClaimDeferred(
   supabase: SupabaseClient
 ): Promise<boolean> {
-  const dailyLimit = process.env.GEMINI_DAILY_LIMIT
-    ? parseInt(process.env.GEMINI_DAILY_LIMIT, 10)
-    : 1500;
+  const dailyLimit = getDailyLimit();
 
   const today = new Date().toISOString().slice(0, 10);
   const { data: row } = await supabase

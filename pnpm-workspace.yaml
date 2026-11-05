@@ -2,3 +2,7 @@ allowBuilds:
   '@google/genai': true
   protobufjs: true
   unrs-resolver: true
+
+# Security: force the patched zod (GHSA-mrhx-c7xc-m3w5) for the copy pinned by @vercel/cli-config
+overrides:
+  '@vercel/cli-config>zod': ^4.6.7
